@@ -20,6 +20,33 @@ class TestHelloWorld(ReachyMiniApp):
     request_media_backend: str | None = None
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event):
+        print("=" * 50)
+        print("TestHelloWorld app starting...")
+        print("=" * 50)
+        
+        # Check if robot needs to be enabled/turned on
+        print(f"ReachyMini object: {reachy_mini}")
+        print(f"ReachyMini type: {type(reachy_mini)}")
+        print(f"ReachyMini methods: {[m for m in dir(reachy_mini) if not m.startswith('_')]}")
+        
+        # Try to enable/turn on the robot if such a method exists
+        if hasattr(reachy_mini, 'turn_on'):
+            print("Turning on robot...")
+            try:
+                reachy_mini.turn_on()
+                print("Robot turned on successfully")
+            except Exception as e:
+                print(f"Error turning on robot: {e}")
+        elif hasattr(reachy_mini, 'enable'):
+            print("Enabling robot...")
+            try:
+                reachy_mini.enable()
+                print("Robot enabled successfully")
+            except Exception as e:
+                print(f"Error enabling robot: {e}")
+        else:
+            print("No turn_on() or enable() method found - robot may already be enabled")
+        
         t0 = time.time()
 
         antennas_enabled = True
@@ -59,7 +86,9 @@ class TestHelloWorld(ReachyMiniApp):
                     print(f"TTS not available and WAV file '{wav_file}' not found")
         
         # Make the bot speak when it starts
+        print("Attempting to speak...")
         speak("Hello! I am Reachy Mini. Ready to interact!")
+        print("Speech attempt completed.")
 
         # You can ignore this part if you don't want to add settings to your app. If you set custom_app_url to None, you have to remove this part as well.
         # === vvv ===
@@ -79,6 +108,9 @@ class TestHelloWorld(ReachyMiniApp):
             
         # === ^^^ ===
 
+        print("Entering main control loop...")
+        loop_count = 0
+        
         # Main control loop
         while not stop_event.is_set():
             t = time.time() - t0
@@ -104,12 +136,27 @@ class TestHelloWorld(ReachyMiniApp):
 
             antennas_rad = np.deg2rad(antennas_deg)
 
-            reachy_mini.set_target(
-                head=head_pose,
-                antennas=antennas_rad,
-            )
+            # Debug output every 50 iterations (roughly once per second)
+            if loop_count % 50 == 0:
+                print(f"Loop {loop_count}: t={t:.2f}s, yaw={yaw_deg:.1f}°, antennas={antennas_deg}")
+            
+            try:
+                reachy_mini.set_target(
+                    head=head_pose,
+                    antennas=antennas_rad,
+                )
+            except Exception as e:
+                print(f"ERROR in set_target: {e}")
+                import traceback
+                traceback.print_exc()
+                # Continue running despite errors
+                time.sleep(0.1)
+                continue
 
+            loop_count += 1
             time.sleep(0.02)
+        
+        print("Control loop ended.")
 
 
 if __name__ == "__main__":
