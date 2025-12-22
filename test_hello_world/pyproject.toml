@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "test_hello_world"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "reachy-mini"
+]
+keywords = ["reachy-mini-app"]
+
+[project.optional-dependencies]
+tts = ["pyttsx3"]
+
+[project.entry-points."reachy_mini_apps"]
+test_hello_world = "test_hello_world.main:TestHelloWorld"
+
+[tool.setuptools]
+package-dir = { "" = "." }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+test_hello_world = ["**/*"] # Also include all non-.py files
