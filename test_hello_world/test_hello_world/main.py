@@ -14,15 +14,14 @@ from pydantic import BaseModel
 from reachy_mini import ReachyMini, ReachyMiniApp
 from reachy_mini.utils import create_head_pose
 
-try:
-    import pyttsx3
-    TTS_AVAILABLE = True
-except ImportError:
-    TTS_AVAILABLE = False
 
 
 class AntennaState(BaseModel):
     enabled: bool
+
+
+class SpeakRequest(BaseModel):
+    text: str
 
 
 class ControlLoop:
@@ -36,39 +35,29 @@ class ControlLoop:
         
         self.antennas_enabled = True
         self.sound_play_requested = False
-        self.tts_engine = None
-        
-        # Initialize TTS engine if available
-        if TTS_AVAILABLE:
-            try:
-                self.tts_engine = pyttsx3.init()
-                self.tts_engine.setProperty('rate', 150)
-                self.tts_engine.setProperty('volume', 0.9)
-                self.logger.info("TTS engine initialized")
-            except Exception as e:
-                self.logger.warning(f"Failed to initialize TTS: {e}")
-                self.tts_engine = None
     
     def speak(self, text: str) -> None:
-        """Make the bot speak using TTS or WAV file."""
-        if self.tts_engine is not None:
+        """Make the robot speak using the robot's built-in media API."""
+        try:
+            # Use the robot's media.speak() method - this uses the robot's 5W speaker
+            self.robot.media.speak(text)
+            self.logger.info(f"Robot said: {text}")
+        except AttributeError:
+            # Fallback if media.speak() doesn't exist, try play_sound with a generated file
+            self.logger.warning("robot.media.speak() not available, trying alternative method")
             try:
-                self.tts_engine.say(text)
-                self.tts_engine.runAndWait()
-                self.logger.info(f"Bot said: {text}")
+                # Some versions might use different methods
+                if hasattr(self.robot.media, 'play_sound'):
+                    # This would require a pre-generated audio file
+                    self.logger.warning("Need to generate audio file for play_sound()")
+                else:
+                    self.logger.error("No speech method available on robot.media")
             except Exception as e:
-                self.logger.error(f"Error speaking: {e}")
-        else:
-            # Fallback: try to play a WAV file if TTS is not available
-            wav_file = "speech.wav"
-            if os.path.exists(wav_file):
-                try:
-                    self.robot.media.play_sound(wav_file)
-                    self.logger.info(f"Playing WAV file: {wav_file}")
-                except Exception as e:
-                    self.logger.error(f"Error playing WAV file: {e}")
-            else:
-                self.logger.warning(f"TTS not available and WAV file '{wav_file}' not found")
+                self.logger.error(f"Error with fallback speech method: {e}")
+        except Exception as e:
+            self.logger.error(f"Error speaking: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
     
     def _run_loop(self) -> None:
         """Main control loop running in a separate thread."""
@@ -77,7 +66,7 @@ class ControlLoop:
         
         self.logger.info("Entering main control loop...")
         
-        # Make the bot speak when it starts
+        # Make the robot speak when it starts
         self.logger.info("Attempting to speak...")
         self.speak("Hello! I am Reachy Mini. Ready to interact!")
         self.logger.info("Speech attempt completed.")
@@ -150,7 +139,7 @@ class ControlLoop:
 
 def setup_logger(debug: bool = False) -> logging.Logger:
     """Set up logging configuration."""
-    level = logging.DEBUG if debug else logging.INFO
+    level = logging.DEBUG
     logging.basicConfig(
         level=level,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -220,6 +209,13 @@ class TestHelloWorld(ReachyMiniApp):
             control_loop.sound_play_requested = True
             logger.info("Sound play requested")
             return {"status": "ok"}
+        
+        @self.settings_app.post("/speak")
+        def request_speak(request: SpeakRequest):
+            """Make the robot speak text."""
+            control_loop.speak(request.text)
+            logger.info(f"Speak requested: {request.text}")
+            return {"status": "ok", "text": request.text}
         
         # Start the control loop
         control_loop.start()
@@ -320,6 +316,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    print("Starting TestHelloWorld app...")
     app = TestHelloWorld()
     try:
         app.wrapped_run()
