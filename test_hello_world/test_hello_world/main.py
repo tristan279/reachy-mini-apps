@@ -6,15 +6,24 @@ import sys
 import tempfile
 import threading
 import time
+from importlib.metadata import version
 from typing import Optional
 
 import numpy as np
 from fastapi import FastAPI
 from gtts import gTTS
 from pydantic import BaseModel
+from pydub import AudioSegment
 
 from reachy_mini import ReachyMini, ReachyMiniApp
 from reachy_mini.utils import create_head_pose
+
+# Get version from package metadata
+try:
+    APP_VERSION = version("test_hello_world")
+except Exception:
+    # Fallback if package not installed
+    APP_VERSION = "unknown"
 
 # Set up logging to both file and console
 LOG_FILE = "/tmp/test_hello_world.log"
@@ -61,6 +70,88 @@ class ControlLoop:
         self.antennas_enabled = True
         self.sound_play_requested = False
     
+    def _play_audio_stream(self, audio_path: str) -> None:
+        """Play audio by streaming samples using start_playing and push_audio_sample."""
+        try:
+            # Load and decode audio file
+            log_print("Loading audio file...")
+            audio = AudioSegment.from_file(audio_path)
+            
+            # Convert to mono if stereo
+            if audio.channels > 1:
+                audio = audio.set_channels(1)
+            
+            # Get sample rate and convert to numpy array
+            sample_rate = audio.frame_rate
+            samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
+            # Normalize to [-1, 1] range
+            if samples.dtype == np.int16:
+                samples = samples.astype(np.float32) / 32768.0
+            elif samples.dtype == np.int32:
+                samples = samples.astype(np.float32) / 2147483648.0
+            
+            # Get output sample rate from robot
+            output_sample_rate = self.robot.media.get_output_audio_samplerate()
+            output_channels = self.robot.media.get_output_channels()
+            
+            log_print(f"Audio: {sample_rate}Hz, {audio.channels}ch -> Robot: {output_sample_rate}Hz, {output_channels}ch")
+            
+            # Resample if needed
+            if sample_rate != output_sample_rate:
+                log_print(f"Resampling from {sample_rate}Hz to {output_sample_rate}Hz...")
+                from scipy import signal
+                num_samples = int(len(samples) * output_sample_rate / sample_rate)
+                samples = signal.resample(samples, num_samples)
+            
+            # Convert to correct channel format
+            if output_channels == 2 and samples.ndim == 1:
+                # Convert mono to stereo
+                samples = np.column_stack([samples, samples])
+            elif output_channels == 1 and samples.ndim > 1:
+                # Convert stereo to mono (take first channel)
+                samples = samples[:, 0] if samples.ndim == 2 else samples[0]
+            
+            # Start playing
+            log_print("Starting audio playback stream...")
+            self.robot.media.start_playing()
+            
+            # Stream audio in chunks (100ms chunks)
+            chunk_size_samples = int(output_sample_rate * 0.1)
+            total_samples = len(samples) if samples.ndim == 1 else samples.shape[0]
+            sent_samples = 0
+            
+            while sent_samples < total_samples:
+                end_idx = min(sent_samples + chunk_size_samples, total_samples)
+                if samples.ndim == 1:
+                    chunk = samples[sent_samples:end_idx]
+                else:
+                    chunk = samples[sent_samples:end_idx, :]
+                
+                self.robot.media.push_audio_sample(chunk)
+                sent_samples = end_idx
+                
+                # Small delay to avoid overwhelming the buffer
+                time.sleep(0.05)
+            
+            # Stop playing
+            log_print("Stopping audio playback...")
+            self.robot.media.stop_playing()
+            log_print("✓ Audio playback completed")
+            
+        except ImportError:
+            log_print("ERROR: scipy is required for audio resampling. Install with: pip install scipy", "ERROR")
+            raise
+        except Exception as e:
+            log_print(f"ERROR in audio streaming: {e}", "ERROR")
+            import traceback
+            log_print(traceback.format_exc(), "ERROR")
+            # Try to stop playing if it was started
+            try:
+                self.robot.media.stop_playing()
+            except:
+                pass
+            raise
+    
     def speak(self, text: str) -> None:
         """Make the robot speak using text-to-speech and the robot's built-in media API."""
         log_print(f"Attempting to speak: '{text}'")
@@ -74,12 +165,7 @@ class ControlLoop:
             log_print("ERROR: robot.media is None - media backend may not be initialized", "ERROR")
             return
         
-        # Check if play_sound method exists
-        if not hasattr(self.robot.media, 'play_sound'):
-            log_print("ERROR: robot.media.play_sound() method does not exist", "ERROR")
-            log_print(f"Available methods: {[m for m in dir(self.robot.media) if not m.startswith('_')]}", "ERROR")
-            return
-        
+        temp_audio_path = None
         try:
             # Generate audio from text using gTTS
             log_print("Generating speech audio from text...")
@@ -92,16 +178,55 @@ class ControlLoop:
             
             log_print(f"Audio saved to temporary file: {temp_audio_path}")
             
-            # Play the audio using robot's speaker
-            log_print("Playing audio on robot's speaker...")
-            self.robot.media.play_sound(temp_audio_path)
-            log_print(f"✓ Robot said: {text}")
+            # Check backend type - WebRTC doesn't support play_sound
+            backend_str = None
+            is_webrtc = False
+            if hasattr(self.robot.media, 'backend'):
+                backend = self.robot.media.backend
+                backend_str = str(backend).lower()
+                # Check if it's WebRTC - could be in the class name or string representation
+                is_webrtc = 'webrtc' in backend_str or 'webrtc' in str(type(backend)).lower()
+                log_print(f"Media backend: {backend_str} (type: {type(backend).__name__})")
             
-            # Clean up temporary file after a short delay (to allow playback to start)
-            def cleanup():
-                time.sleep(2)  # Wait a bit for playback to start
+            # Try play_sound first only if NOT WebRTC (gstreamer backend supports it)
+            # WebRTC backend logs a warning but doesn't raise exception, so we check upfront
+            if hasattr(self.robot.media, 'play_sound') and not is_webrtc:
+                log_print("Attempting to play audio using play_sound() (gstreamer backend)...")
                 try:
-                    if os.path.exists(temp_audio_path):
+                    self.robot.media.play_sound(temp_audio_path)
+                    log_print(f"✓ Robot said: {text}")
+                    # Success - cleanup will happen below
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    if "not implemented" in error_msg or "webrtc" in error_msg:
+                        log_print("play_sound() not supported, trying audio streaming...", "WARNING")
+                        # Fall back to streaming method
+                        self._play_audio_stream(temp_audio_path)
+                        log_print(f"✓ Robot said: {text}")
+                    else:
+                        raise
+            else:
+                # Use streaming method (required for WebRTC or if play_sound doesn't exist)
+                if is_webrtc:
+                    log_print("WebRTC backend detected - using audio streaming method...")
+                elif not hasattr(self.robot.media, 'play_sound'):
+                    log_print("play_sound() not available, trying audio streaming...")
+                else:
+                    log_print("Using audio streaming method...")
+                
+                if hasattr(self.robot.media, 'start_playing') and hasattr(self.robot.media, 'push_audio_sample'):
+                    self._play_audio_stream(temp_audio_path)
+                    log_print(f"✓ Robot said: {text}")
+                else:
+                    log_print("ERROR: No audio playback methods available", "ERROR")
+                    log_print(f"Available methods: {[m for m in dir(self.robot.media) if not m.startswith('_')]}", "ERROR")
+                    return
+            
+            # Clean up temporary file after a delay
+            def cleanup():
+                time.sleep(3)  # Wait for playback to complete
+                try:
+                    if temp_audio_path and os.path.exists(temp_audio_path):
                         os.unlink(temp_audio_path)
                         log_print(f"Cleaned up temporary audio file: {temp_audio_path}")
                 except Exception as e:
@@ -114,6 +239,12 @@ class ControlLoop:
             log_print(f"ERROR speaking: {e}", "ERROR")
             import traceback
             log_print(traceback.format_exc(), "ERROR")
+            # Clean up temp file on error
+            if temp_audio_path and os.path.exists(temp_audio_path):
+                try:
+                    os.unlink(temp_audio_path)
+                except:
+                    pass
     
     def _run_loop(self) -> None:
         """Main control loop running in a separate thread."""
@@ -205,6 +336,7 @@ class TestHelloWorld(ReachyMiniApp):
         """Run the app with the provided ReachyMini instance."""
         log_print("=" * 50)
         log_print("TestHelloWorld app starting...")
+        log_print(f"Version: {APP_VERSION}")
         log_print(f"Logs are being written to: {LOG_FILE}")
         log_print("=" * 50)
         
@@ -242,6 +374,16 @@ class TestHelloWorld(ReachyMiniApp):
             log_print(f"✓ robot.media exists: {type(reachy_mini.media)}")
             if reachy_mini.media is not None:
                 log_print(f"✓ robot.media is not None")
+                
+                # Log the backend type
+                if hasattr(reachy_mini.media, 'backend'):
+                    backend = reachy_mini.media.backend
+                    backend_str = str(backend)
+                    backend_type = type(backend).__name__
+                    log_print(f"✓ Media backend: {backend_str} (type: {backend_type})")
+                else:
+                    log_print("⚠ Media backend attribute not available")
+                
                 methods = [m for m in dir(reachy_mini.media) if not m.startswith('_')]
                 log_print(f"✓ Available media methods: {methods}")
                 if 'play_sound' in methods:
@@ -299,6 +441,7 @@ def main() -> None:
     """Entrypoint for the Test Hello World app."""
     print("=" * 50)
     print("TestHelloWorld app starting...")
+    print(f"Version: {APP_VERSION}")
     print("=" * 50)
     
     robot = ReachyMini()
