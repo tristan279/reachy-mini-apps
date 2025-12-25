@@ -1,21 +1,39 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
-
 
 [project]
 name = "test_hello_world"
 version = "0.1.0"
-description = "Add your description here"
+authors = [{ name = "Tristan Dhoedt", email = "tristandhoedt@gmail.com" }]
+description = ""
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "reachy-mini"
+    # Reachy mini
+    "reachy_mini>=1.2.3rc1",
+    "eclipse-zenoh~=1.7.0",
 ]
-keywords = ["reachy-mini-app"]
 
 [project.optional-dependencies]
 tts = ["pyttsx3"]
+reachy_mini_wireless = [
+  "PyGObject>=3.42.2,<=3.46.0", 
+  "gst-signalling>=1.1.2",
+]
+
+[dependency-groups]
+dev = [
+  "pytest",
+  "pytest-asyncio",
+  "ruff==0.12.0",
+  "mypy==1.18.2",
+  "pre-commit",
+  "types-requests",
+]
+
+[project.scripts]
+test-hello-world = "test_hello_world.main:main"
 
 [project.entry-points."reachy_mini_apps"]
 test_hello_world = "test_hello_world.main:TestHelloWorld"
@@ -28,4 +46,51 @@ include-package-data = true
 where = ["."]
 
 [tool.setuptools.package-data]
-test_hello_world = ["**/*"] # Also include all non-.py files
+test_hello_world = [
+  "static/*",
+  "**/*.html",
+  "**/*.js",
+  "**/*.css",
+]
+
+[tool.ruff]
+line-length = 119
+exclude = [".venv", "dist", "build", "**/__pycache__", "*.egg-info", ".mypy_cache", ".pytest_cache"]
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "W",   # pycodestyle warnings
+  "I",   # isort
+  "C4",  # flake8-comprehensions
+  "D",   # pydocstyle
+]
+ignore = [
+  "E501",  # handled by formatter
+  "D100",  # ignore missing module docstrings
+  "D203",  # blank line before class docstring (conflicts with D211)
+  "D213",  # summary on second line (conflicts with D212)
+]
+
+[tool.ruff.lint.isort]
+length-sort = true
+lines-after-imports = 2
+no-lines-before = ["standard-library", "local-folder"]
+known-local-folder = ["test_hello_world"]
+known-first-party = ["reachy_mini", "reachy_mini_dances_library", "reachy_mini_toolbox"]
+split-on-trailing-comma = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.mypy]
+python_version = "3.12"
+files = ["test_hello_world/"]
+ignore_missing_imports = true
+strict = true
+show_error_codes = true
+warn_unused_ignores = true
