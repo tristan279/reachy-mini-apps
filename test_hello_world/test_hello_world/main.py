@@ -181,16 +181,54 @@ class ControlLoop:
             # Check backend type - WebRTC doesn't support play_sound
             backend_str = None
             is_webrtc = False
+            backend_determined = False
+            
+            # First, try to get backend from media object
             if hasattr(self.robot.media, 'backend'):
                 backend = self.robot.media.backend
-                backend_str = str(backend).lower()
-                # Check if it's WebRTC - could be in the class name or string representation
-                is_webrtc = 'webrtc' in backend_str or 'webrtc' in str(type(backend)).lower()
-                log_print(f"Media backend: {backend_str} (type: {type(backend).__name__})")
+                backend_str = str(backend)
+                backend_type_name = type(backend).__name__
+                backend_type_str = str(type(backend))
+                backend_module = getattr(type(backend), '__module__', 'unknown')
+                
+                # Check if it's WebRTC - check class name, string representation, and module
+                is_webrtc = (
+                    'webrtc' in backend_str.lower() or 
+                    'webrtc' in backend_type_name.lower() or 
+                    'webrtc' in backend_type_str.lower() or
+                    'webrtc' in backend_module.lower() or
+                    'WebRTC' in backend_type_name
+                )
+                backend_determined = True
+                log_print(f"Media backend object: {backend_str}")
+                log_print(f"Media backend type: {backend_type_name} (module: {backend_module})")
+                log_print(f"Detected as WebRTC: {is_webrtc}")
+            else:
+                log_print("⚠ Media backend attribute not available")
             
-            # Try play_sound first only if NOT WebRTC (gstreamer backend supports it)
+            # Additional check: if we can't determine, check if running on wireless
+            # Wireless connections typically use WebRTC
+            if not backend_determined and hasattr(self.robot, 'client'):
+                try:
+                    # Check if we're connecting via WebSocket (indicates WebRTC/wireless)
+                    client_str = str(self.robot.client)
+                    if 'websocket' in client_str.lower() or 'ws://' in client_str.lower():
+                        log_print("⚠ Detected WebSocket connection (likely WebRTC), using streaming method")
+                        is_webrtc = True
+                        backend_determined = True
+                except:
+                    pass
+            
+            # If still not determined, default to streaming for safety (works with both backends)
+            # This is safer since streaming works for both WebRTC and gstreamer
+            if not backend_determined:
+                log_print("⚠ Backend type unclear, defaulting to streaming method for compatibility")
+                is_webrtc = True  # Use streaming as default since it works for both
+            
+            # Try play_sound first only if we're CERTAIN it's NOT WebRTC (gstreamer backend supports it)
             # WebRTC backend logs a warning but doesn't raise exception, so we check upfront
-            if hasattr(self.robot.media, 'play_sound') and not is_webrtc:
+            # Only use play_sound if we explicitly determined it's NOT WebRTC
+            if hasattr(self.robot.media, 'play_sound') and backend_determined and not is_webrtc:
                 log_print("Attempting to play audio using play_sound() (gstreamer backend)...")
                 try:
                     self.robot.media.play_sound(temp_audio_path)
@@ -330,7 +368,7 @@ class TestHelloWorld(ReachyMiniApp):
     # Optional: URL to a custom configuration page for the app
     custom_app_url: str | None = "http://0.0.0.0:8042"
     # Optional: specify a media backend ("gstreamer", "default", etc.)
-    request_media_backend: str | None = "gstreamer"
+    request_media_backend: str | None = "default"
     
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event):
         """Run the app with the provided ReachyMini instance."""
@@ -369,6 +407,7 @@ class TestHelloWorld(ReachyMiniApp):
         # Check media backend availability
         log_print("\n" + "=" * 50)
         log_print("Checking media backend...")
+        log_print(f"App Version: {APP_VERSION}")
         log_print("=" * 50)
         if hasattr(reachy_mini, 'media'):
             log_print(f"✓ robot.media exists: {type(reachy_mini.media)}")
@@ -380,7 +419,16 @@ class TestHelloWorld(ReachyMiniApp):
                     backend = reachy_mini.media.backend
                     backend_str = str(backend)
                     backend_type = type(backend).__name__
-                    log_print(f"✓ Media backend: {backend_str} (type: {backend_type})")
+                    backend_module = type(backend).__module__
+                    log_print(f"✓ Media backend: {backend_str}")
+                    log_print(f"✓ Backend type: {backend_type} (module: {backend_module})")
+                    # Check if WebRTC
+                    is_webrtc_check = (
+                        'webrtc' in backend_str.lower() or 
+                        'webrtc' in backend_type.lower() or
+                        'WebRTC' in backend_type
+                    )
+                    log_print(f"✓ Is WebRTC backend: {is_webrtc_check}")
                 else:
                     log_print("⚠ Media backend attribute not available")
                 
@@ -424,6 +472,11 @@ class TestHelloWorld(ReachyMiniApp):
         
         # Start the control loop
         control_loop.start()
+        
+        # Wait a moment for everything to initialize, then speak
+        log_print("App fully initialized. Speaking welcome message...")
+        time.sleep(0.5)  # Brief delay to ensure everything is ready
+        control_loop.speak("App initialized and ready!")
         
         try:
             # Wait for stop event
