@@ -1,5 +1,6 @@
 """Entrypoint for the Test Hello World app."""
 
+import logging
 import os
 import sys
 import threading
@@ -12,6 +13,30 @@ from pydantic import BaseModel
 
 from reachy_mini import ReachyMini, ReachyMiniApp
 from reachy_mini.utils import create_head_pose
+
+# Set up logging to both file and console
+LOG_FILE = "/tmp/test_hello_world.log"
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+def log_print(message: str, level: str = "INFO"):
+    """Print to both console and log file."""
+    print(message)
+    if level == "DEBUG":
+        logger.debug(message)
+    elif level == "WARNING":
+        logger.warning(message)
+    elif level == "ERROR":
+        logger.error(message)
+    else:
+        logger.info(message)
 
 
 
@@ -36,38 +61,57 @@ class ControlLoop:
     
     def speak(self, text: str) -> None:
         """Make the robot speak using the robot's built-in media API."""
+        log_print(f"Attempting to speak: '{text}'")
+        
+        # Check if media object exists
+        if not hasattr(self.robot, 'media'):
+            log_print("ERROR: robot.media attribute does not exist!", "ERROR")
+            return
+        
+        if self.robot.media is None:
+            log_print("ERROR: robot.media is None - media backend may not be initialized", "ERROR")
+            return
+        
+        log_print(f"Media object available: {type(self.robot.media)}")
+        log_print(f"Media methods: {[m for m in dir(self.robot.media) if not m.startswith('_')]}")
+        
         try:
             # Use the robot's media.speak() method - this uses the robot's 5W speaker
-            self.robot.media.speak(text)
-            print(f"Robot said: {text}")
+            if hasattr(self.robot.media, 'speak'):
+                log_print("Calling robot.media.speak()...")
+                self.robot.media.speak(text)
+                log_print(f"✓ Robot said: {text}")
+            else:
+                log_print("ERROR: robot.media.speak() method does not exist", "ERROR")
+                log_print(f"Available methods: {[m for m in dir(self.robot.media) if not m.startswith('_')]}", "ERROR")
         except AttributeError:
             # Fallback if media.speak() doesn't exist, try play_sound with a generated file
-            print("Warning: robot.media.speak() not available, trying alternative method")
+            log_print("Warning: robot.media.speak() not available, trying alternative method", "WARNING")
             try:
                 # Some versions might use different methods
                 if hasattr(self.robot.media, 'play_sound'):
                     # This would require a pre-generated audio file
-                    print("Warning: Need to generate audio file for play_sound()")
+                    log_print("Warning: Need to generate audio file for play_sound()", "WARNING")
                 else:
-                    print("Error: No speech method available on robot.media")
+                    log_print("Error: No speech method available on robot.media", "ERROR")
             except Exception as e:
-                print(f"Error with fallback speech method: {e}")
+                log_print(f"Error with fallback speech method: {e}", "ERROR")
         except Exception as e:
-            print(f"Error speaking: {e}")
+            log_print(f"ERROR speaking: {e}", "ERROR")
             import traceback
-            print(traceback.format_exc())
+            log_print(traceback.format_exc(), "ERROR")
     
     def _run_loop(self) -> None:
         """Main control loop running in a separate thread."""
         t0 = time.time()
         loop_count = 0
         
-        print("Entering main control loop...")
+        log_print("Entering main control loop...")
         
         # Make the robot speak when it starts
-        print("Attempting to speak...")
+        log_print("Attempting to speak...")
         self.speak("Hello! I am Reachy Mini. Ready to interact!")
-        print("Speech attempt completed.")
+        log_print("Speech attempt completed.")
         
         while not self.stop_event.is_set():
             t = time.time() - t0
@@ -141,13 +185,14 @@ class TestHelloWorld(ReachyMiniApp):
     # Optional: URL to a custom configuration page for the app
     custom_app_url: str | None = "http://0.0.0.0:8042"
     # Optional: specify a media backend ("gstreamer", "default", etc.)
-    request_media_backend: str | None = None
+    request_media_backend: str | None = "gstreamer"
     
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event):
         """Run the app with the provided ReachyMini instance."""
-        print("=" * 50)
-        print("TestHelloWorld app starting...")
-        print("=" * 50)
+        log_print("=" * 50)
+        log_print("TestHelloWorld app starting...")
+        log_print(f"Logs are being written to: {LOG_FILE}")
+        log_print("=" * 50)
         
         # Check if robot needs to be enabled/turned on
         if hasattr(reachy_mini, 'turn_on'):
@@ -171,9 +216,29 @@ class TestHelloWorld(ReachyMiniApp):
         try:
             status = reachy_mini.client.get_status()
             if status.get("simulation_enabled", False):
-                print("Running in simulation mode")
+                log_print("Running in simulation mode")
         except Exception as e:
-            print(f"Could not check simulation status: {e}")
+            log_print(f"Could not check simulation status: {e}", "WARNING")
+        
+        # Check media backend availability
+        log_print("\n" + "=" * 50)
+        log_print("Checking media backend...")
+        log_print("=" * 50)
+        if hasattr(reachy_mini, 'media'):
+            log_print(f"✓ robot.media exists: {type(reachy_mini.media)}")
+            if reachy_mini.media is not None:
+                log_print(f"✓ robot.media is not None")
+                methods = [m for m in dir(reachy_mini.media) if not m.startswith('_')]
+                log_print(f"✓ Available media methods: {methods}")
+                if 'speak' in methods:
+                    log_print("✓ robot.media.speak() is available")
+                else:
+                    log_print("✗ robot.media.speak() is NOT available", "ERROR")
+            else:
+                log_print("✗ robot.media is None - media backend may not be initialized", "ERROR")
+        else:
+            log_print("✗ robot.media attribute does not exist", "ERROR")
+        log_print("=" * 50 + "\n")
         
         # Create control loop
         control_loop = ControlLoop(reachy_mini, stop_event)
@@ -198,8 +263,8 @@ class TestHelloWorld(ReachyMiniApp):
             print(f"Speak requested: {request.text}")
             return {"status": "ok", "text": request.text}
         
-        print(f"Web interface available at: {self.custom_app_url}")
-        print("Starting control loop...")
+        log_print(f"Web interface available at: {self.custom_app_url}")
+        log_print("Starting control loop...")
         
         # Start the control loop
         control_loop.start()
