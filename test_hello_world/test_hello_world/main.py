@@ -174,8 +174,17 @@ class ControlLoop:
             
             log_print(f"Audio saved to temporary file: {temp_audio_path}")
             
-            # Try play_sound() first (like conversation app does)
-            if hasattr(self.robot.media, 'play_sound'):
+            # Check if we're using WebRTC backend (play_sound doesn't work with WebRTC)
+            is_webrtc = False
+            if hasattr(self.robot.media, 'backend'):
+                backend_str = str(self.robot.media.backend).lower()
+                backend_type = type(self.robot.media.backend).__name__.lower()
+                is_webrtc = 'webrtc' in backend_str or 'webrtc' in backend_type
+                if is_webrtc:
+                    log_print("WebRTC backend detected - will use streaming method")
+            
+            # Try play_sound() first ONLY if NOT WebRTC (like conversation app does)
+            if not is_webrtc and hasattr(self.robot.media, 'play_sound'):
                 try:
                     log_print("Attempting to play audio using play_sound()...")
                     self.robot.media.play_sound(temp_audio_path)
@@ -194,9 +203,12 @@ class ControlLoop:
                 except Exception as e:
                     log_print(f"play_sound() failed: {e}, trying streaming method...", "WARNING")
             
-            # Fallback: Use streaming method (works with WebRTC backend)
+            # Use streaming method (required for WebRTC backend, or fallback)
             if hasattr(self.robot.media, 'start_playing') and hasattr(self.robot.media, 'push_audio_sample'):
-                log_print("Using audio streaming method...")
+                if is_webrtc:
+                    log_print("Using audio streaming method (WebRTC backend)...")
+                else:
+                    log_print("Using audio streaming method...")
                 self._play_audio_stream(temp_audio_path)
                 log_print(f"✓ Robot said: {text}")
                 # Cleanup
