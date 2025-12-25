@@ -73,6 +73,16 @@ class ControlLoop:
     def _play_audio_stream(self, audio_path: str) -> None:
         """Play audio by streaming samples using start_playing and push_audio_sample."""
         try:
+            # Check if ffprobe is available (required for pydub to decode MP3)
+            import shutil
+            if not shutil.which('ffprobe'):
+                log_print("ERROR: ffprobe (from ffmpeg) is required to decode MP3 files.", "ERROR")
+                log_print("Please install ffmpeg:", "ERROR")
+                log_print("  Ubuntu/Debian: sudo apt install ffmpeg", "ERROR")
+                log_print("  macOS: brew install ffmpeg", "ERROR")
+                log_print("  Or download from: https://ffmpeg.org/download.html", "ERROR")
+                raise FileNotFoundError("ffprobe not found. Please install ffmpeg.")
+            
             # Load and decode audio file
             log_print("Loading audio file...")
             audio = AudioSegment.from_file(audio_path)
@@ -138,13 +148,28 @@ class ControlLoop:
             self.robot.media.stop_playing()
             log_print("✓ Audio playback completed")
             
+        except FileNotFoundError as e:
+            if 'ffprobe' in str(e).lower():
+                # Already logged helpful message above
+                raise
+            else:
+                log_print(f"ERROR: File not found: {e}", "ERROR")
+                raise
         except ImportError:
             log_print("ERROR: scipy is required for audio resampling. Install with: pip install scipy", "ERROR")
             raise
         except Exception as e:
-            log_print(f"ERROR in audio streaming: {e}", "ERROR")
-            import traceback
-            log_print(traceback.format_exc(), "ERROR")
+            error_msg = str(e).lower()
+            if 'ffprobe' in error_msg or 'no such file or directory' in error_msg:
+                log_print("ERROR: ffprobe (from ffmpeg) is required to decode MP3 files.", "ERROR")
+                log_print("Please install ffmpeg:", "ERROR")
+                log_print("  Ubuntu/Debian: sudo apt install ffmpeg", "ERROR")
+                log_print("  macOS: brew install ffmpeg", "ERROR")
+                log_print("  Or download from: https://ffmpeg.org/download.html", "ERROR")
+            else:
+                log_print(f"ERROR in audio streaming: {e}", "ERROR")
+                import traceback
+                log_print(traceback.format_exc(), "ERROR")
             # Try to stop playing if it was started
             try:
                 self.robot.media.stop_playing()
