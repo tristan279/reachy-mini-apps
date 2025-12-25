@@ -3,12 +3,14 @@
 import logging
 import os
 import sys
+import tempfile
 import threading
 import time
 from typing import Optional
 
 import numpy as np
 from fastapi import FastAPI
+from gtts import gTTS
 from pydantic import BaseModel
 
 from reachy_mini import ReachyMini, ReachyMiniApp
@@ -60,7 +62,7 @@ class ControlLoop:
         self.sound_play_requested = False
     
     def speak(self, text: str) -> None:
-        """Make the robot speak using the robot's built-in media API."""
+        """Make the robot speak using text-to-speech and the robot's built-in media API."""
         log_print(f"Attempting to speak: '{text}'")
         
         # Check if media object exists
@@ -72,30 +74,42 @@ class ControlLoop:
             log_print("ERROR: robot.media is None - media backend may not be initialized", "ERROR")
             return
         
-        log_print(f"Media object available: {type(self.robot.media)}")
-        log_print(f"Media methods: {[m for m in dir(self.robot.media) if not m.startswith('_')]}")
+        # Check if play_sound method exists
+        if not hasattr(self.robot.media, 'play_sound'):
+            log_print("ERROR: robot.media.play_sound() method does not exist", "ERROR")
+            log_print(f"Available methods: {[m for m in dir(self.robot.media) if not m.startswith('_')]}", "ERROR")
+            return
         
         try:
-            # Use the robot's media.speak() method - this uses the robot's 5W speaker
-            if hasattr(self.robot.media, 'speak'):
-                log_print("Calling robot.media.speak()...")
-                self.robot.media.speak(text)
-                log_print(f"✓ Robot said: {text}")
-            else:
-                log_print("ERROR: robot.media.speak() method does not exist", "ERROR")
-                log_print(f"Available methods: {[m for m in dir(self.robot.media) if not m.startswith('_')]}", "ERROR")
-        except AttributeError:
-            # Fallback if media.speak() doesn't exist, try play_sound with a generated file
-            log_print("Warning: robot.media.speak() not available, trying alternative method", "WARNING")
-            try:
-                # Some versions might use different methods
-                if hasattr(self.robot.media, 'play_sound'):
-                    # This would require a pre-generated audio file
-                    log_print("Warning: Need to generate audio file for play_sound()", "WARNING")
-                else:
-                    log_print("Error: No speech method available on robot.media", "ERROR")
-            except Exception as e:
-                log_print(f"Error with fallback speech method: {e}", "ERROR")
+            # Generate audio from text using gTTS
+            log_print("Generating speech audio from text...")
+            tts = gTTS(text=text, lang='en', slow=False)
+            
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
+                temp_audio_path = tmp_file.name
+                tts.save(temp_audio_path)
+            
+            log_print(f"Audio saved to temporary file: {temp_audio_path}")
+            
+            # Play the audio using robot's speaker
+            log_print("Playing audio on robot's speaker...")
+            self.robot.media.play_sound(temp_audio_path)
+            log_print(f"✓ Robot said: {text}")
+            
+            # Clean up temporary file after a short delay (to allow playback to start)
+            def cleanup():
+                time.sleep(2)  # Wait a bit for playback to start
+                try:
+                    if os.path.exists(temp_audio_path):
+                        os.unlink(temp_audio_path)
+                        log_print(f"Cleaned up temporary audio file: {temp_audio_path}")
+                except Exception as e:
+                    log_print(f"Warning: Could not delete temp file {temp_audio_path}: {e}", "WARNING")
+            
+            # Clean up in background thread
+            threading.Thread(target=cleanup, daemon=True).start()
+            
         except Exception as e:
             log_print(f"ERROR speaking: {e}", "ERROR")
             import traceback
@@ -230,10 +244,10 @@ class TestHelloWorld(ReachyMiniApp):
                 log_print(f"✓ robot.media is not None")
                 methods = [m for m in dir(reachy_mini.media) if not m.startswith('_')]
                 log_print(f"✓ Available media methods: {methods}")
-                if 'speak' in methods:
-                    log_print("✓ robot.media.speak() is available")
+                if 'play_sound' in methods:
+                    log_print("✓ robot.media.play_sound() is available")
                 else:
-                    log_print("✗ robot.media.speak() is NOT available", "ERROR")
+                    log_print("✗ robot.media.play_sound() is NOT available", "ERROR")
             else:
                 log_print("✗ robot.media is None - media backend may not be initialized", "ERROR")
         else:
