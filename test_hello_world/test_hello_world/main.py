@@ -291,10 +291,13 @@ class ControlLoop:
         
         log_print("Entering main control loop...")
         
-        # Make the robot speak when it starts
-        log_print("Attempting to speak...")
-        self.speak("Hello! I am Reachy Mini. Ready to interact!")
-        log_print("Speech attempt completed.")
+        # Make the robot speak when it starts (in a separate thread to not block the loop)
+        def speak_async():
+            log_print("Attempting to speak...")
+            self.speak("Hello! I am Reachy Mini. Ready to interact!")
+            log_print("Speech attempt completed.")
+        
+        threading.Thread(target=speak_async, daemon=True).start()
         
         while not self.stop_event.is_set():
             t = time.time() - t0
@@ -473,10 +476,13 @@ class TestHelloWorld(ReachyMiniApp):
         # Start the control loop
         control_loop.start()
         
-        # Wait a moment for everything to initialize, then speak
-        log_print("App fully initialized. Speaking welcome message...")
-        time.sleep(0.5)  # Brief delay to ensure everything is ready
-        control_loop.speak("App initialized and ready!")
+        # Wait a moment for everything to initialize, then speak (non-blocking)
+        def speak_after_init():
+            time.sleep(0.5)  # Brief delay to ensure everything is ready
+            log_print("App fully initialized. Speaking welcome message...")
+            control_loop.speak("App initialized and ready!")
+        
+        threading.Thread(target=speak_after_init, daemon=True).start()
         
         try:
             # Wait for stop event
