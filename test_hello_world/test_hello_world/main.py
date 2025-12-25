@@ -153,21 +153,17 @@ class ControlLoop:
             raise
     
     def speak(self, text: str) -> None:
-        """Make the robot speak using text-to-speech and the robot's built-in media API."""
+        """Make the robot speak using text-to-speech - simplified approach matching conversation app pattern."""
         log_print(f"Attempting to speak: '{text}'")
         
         # Check if media object exists
-        if not hasattr(self.robot, 'media'):
-            log_print("ERROR: robot.media attribute does not exist!", "ERROR")
-            return
-        
-        if self.robot.media is None:
-            log_print("ERROR: robot.media is None - media backend may not be initialized", "ERROR")
+        if not hasattr(self.robot, 'media') or self.robot.media is None:
+            log_print("ERROR: robot.media is not available!", "ERROR")
             return
         
         temp_audio_path = None
         try:
-            # Generate audio from text using gTTS
+            # Generate audio from text using gTTS (like conversation app generates/downloads audio)
             log_print("Generating speech audio from text...")
             tts = gTTS(text=text, lang='en', slow=False)
             
@@ -178,100 +174,39 @@ class ControlLoop:
             
             log_print(f"Audio saved to temporary file: {temp_audio_path}")
             
-            # Check backend type - WebRTC doesn't support play_sound
-            backend_str = None
-            is_webrtc = False
-            backend_determined = False
-            
-            # First, try to get backend from media object
-            if hasattr(self.robot.media, 'backend'):
-                backend = self.robot.media.backend
-                backend_str = str(backend)
-                backend_type_name = type(backend).__name__
-                backend_type_str = str(type(backend))
-                backend_module = getattr(type(backend), '__module__', 'unknown')
-                
-                # Check if it's WebRTC - check class name, string representation, and module
-                is_webrtc = (
-                    'webrtc' in backend_str.lower() or 
-                    'webrtc' in backend_type_name.lower() or 
-                    'webrtc' in backend_type_str.lower() or
-                    'webrtc' in backend_module.lower() or
-                    'WebRTC' in backend_type_name
-                )
-                backend_determined = True
-                log_print(f"Media backend object: {backend_str}")
-                log_print(f"Media backend type: {backend_type_name} (module: {backend_module})")
-                log_print(f"Detected as WebRTC: {is_webrtc}")
-            else:
-                log_print("⚠ Media backend attribute not available")
-            
-            # Additional check: if we can't determine, check if running on wireless
-            # Wireless connections typically use WebRTC
-            if not backend_determined and hasattr(self.robot, 'client'):
+            # Try play_sound() first (like conversation app does)
+            if hasattr(self.robot.media, 'play_sound'):
                 try:
-                    # Check if we're connecting via WebSocket (indicates WebRTC/wireless)
-                    client_str = str(self.robot.client)
-                    if 'websocket' in client_str.lower() or 'ws://' in client_str.lower():
-                        log_print("⚠ Detected WebSocket connection (likely WebRTC), using streaming method")
-                        is_webrtc = True
-                        backend_determined = True
-                except:
-                    pass
-            
-            # If still not determined, default to streaming for safety (works with both backends)
-            # This is safer since streaming works for both WebRTC and gstreamer
-            if not backend_determined:
-                log_print("⚠ Backend type unclear, defaulting to streaming method for compatibility")
-                is_webrtc = True  # Use streaming as default since it works for both
-            
-            # Try play_sound first only if we're CERTAIN it's NOT WebRTC (gstreamer backend supports it)
-            # WebRTC backend logs a warning but doesn't raise exception, so we check upfront
-            # Only use play_sound if we explicitly determined it's NOT WebRTC
-            if hasattr(self.robot.media, 'play_sound') and backend_determined and not is_webrtc:
-                log_print("Attempting to play audio using play_sound() (gstreamer backend)...")
-                try:
+                    log_print("Attempting to play audio using play_sound()...")
                     self.robot.media.play_sound(temp_audio_path)
                     log_print(f"✓ Robot said: {text}")
-                    # Success - cleanup will happen below
-                except Exception as e:
-                    error_msg = str(e).lower()
-                    if "not implemented" in error_msg or "webrtc" in error_msg:
-                        log_print("play_sound() not supported, trying audio streaming...", "WARNING")
-                        # Fall back to streaming method
-                        self._play_audio_stream(temp_audio_path)
-                        log_print(f"✓ Robot said: {text}")
-                    else:
-                        raise
-            else:
-                # Use streaming method (required for WebRTC or if play_sound doesn't exist)
-                if is_webrtc:
-                    log_print("WebRTC backend detected - using audio streaming method...")
-                elif not hasattr(self.robot.media, 'play_sound'):
-                    log_print("play_sound() not available, trying audio streaming...")
-                else:
-                    log_print("Using audio streaming method...")
-                
-                if hasattr(self.robot.media, 'start_playing') and hasattr(self.robot.media, 'push_audio_sample'):
-                    self._play_audio_stream(temp_audio_path)
-                    log_print(f"✓ Robot said: {text}")
-                else:
-                    log_print("ERROR: No audio playback methods available", "ERROR")
-                    log_print(f"Available methods: {[m for m in dir(self.robot.media) if not m.startswith('_')]}", "ERROR")
+                    # Cleanup after a delay
+                    def cleanup():
+                        time.sleep(3)  # Wait for playback to complete
+                        try:
+                            if os.path.exists(temp_audio_path):
+                                os.unlink(temp_audio_path)
+                                log_print(f"Cleaned up temporary audio file: {temp_audio_path}")
+                        except Exception as e:
+                            log_print(f"Warning: Could not delete temp file {temp_audio_path}: {e}", "WARNING")
+                    threading.Thread(target=cleanup, daemon=True).start()
                     return
-            
-            # Clean up temporary file after a delay
-            def cleanup():
-                time.sleep(3)  # Wait for playback to complete
-                try:
-                    if temp_audio_path and os.path.exists(temp_audio_path):
-                        os.unlink(temp_audio_path)
-                        log_print(f"Cleaned up temporary audio file: {temp_audio_path}")
                 except Exception as e:
-                    log_print(f"Warning: Could not delete temp file {temp_audio_path}: {e}", "WARNING")
+                    log_print(f"play_sound() failed: {e}, trying streaming method...", "WARNING")
             
-            # Clean up in background thread
-            threading.Thread(target=cleanup, daemon=True).start()
+            # Fallback: Use streaming method (works with WebRTC backend)
+            if hasattr(self.robot.media, 'start_playing') and hasattr(self.robot.media, 'push_audio_sample'):
+                log_print("Using audio streaming method...")
+                self._play_audio_stream(temp_audio_path)
+                log_print(f"✓ Robot said: {text}")
+                # Cleanup
+                if os.path.exists(temp_audio_path):
+                    os.unlink(temp_audio_path)
+            else:
+                log_print("ERROR: No audio playback methods available", "ERROR")
+                log_print(f"Available methods: {[m for m in dir(self.robot.media) if not m.startswith('_')]}", "ERROR")
+                if temp_audio_path and os.path.exists(temp_audio_path):
+                    os.unlink(temp_audio_path)
             
         except Exception as e:
             log_print(f"ERROR speaking: {e}", "ERROR")
