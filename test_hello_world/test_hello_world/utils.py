@@ -8,10 +8,6 @@ from typing import Optional
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
 
 # Set up logging to both file and console (same as main.py)
 LOG_FILE = "/tmp/test_hello_world.log"
