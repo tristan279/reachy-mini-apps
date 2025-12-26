@@ -33,7 +33,7 @@ def get_polly_client():
 
     if not aws_access_key_id or not aws_secret_access_key:
         raise ValueError(
-            "AWS credentials not found. Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in .env file"
+            "AWS credentials not found. Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
         )
 
     return boto3.client(
@@ -52,7 +52,7 @@ def get_transcribe_client():
 
     if not aws_access_key_id or not aws_secret_access_key:
         raise ValueError(
-            "AWS credentials not found. Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in .env file"
+            "AWS credentials not found. Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
         )
 
     return boto3.client(
