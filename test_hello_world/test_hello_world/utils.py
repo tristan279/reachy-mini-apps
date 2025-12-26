@@ -26,31 +26,21 @@ logger = logging.getLogger(__name__)
 
 
 def get_polly_client():
-    """Get AWS Polly client with credentials from environment or AWS credentials file."""
-    aws_access_key_id = os.getenv("AWS_ACCESS_KEY_ID")
-    aws_secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+    """Get AWS Polly client using the 'reachy-mini' AWS profile."""
     aws_region = os.getenv("AWS_REGION", "eu-west-1")
+    aws_profile = "reachy-mini"  # Use the reachy-mini profile
 
-    # If credentials provided via environment variables, use them explicitly
-    if aws_access_key_id and aws_secret_access_key:
-        return boto3.client(
-            "polly",
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            region_name=aws_region,
-        )
-    
-    # Otherwise, use boto3's default credential chain (checks ~/.aws/credentials, IAM roles, etc.)
-    # This will work if credentials are configured via 'aws configure'
+    # Use boto3 Session with the reachy-mini profile
+    # This will work if credentials are configured via 'aws configure --profile reachy-mini'
     try:
-        return boto3.client("polly", region_name=aws_region)
+        session = boto3.Session(profile_name=aws_profile)
+        return session.client("polly", region_name=aws_region)
     except Exception as e:
         error_msg = str(e)
-        if "Unable to locate credentials" in error_msg or "NoCredentialsError" in error_msg:
+        if "Unable to locate credentials" in error_msg or "NoCredentialsError" in error_msg or "ProfileNotFound" in error_msg:
             raise ValueError(
-                "AWS credentials not found. Please configure credentials using:\n"
-                "  1. Environment variables: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY\n"
-                "  2. AWS credentials file: Run 'aws configure' or create ~/.aws/credentials\n"
+                f"AWS profile 'reachy-mini' not found. Please configure credentials using:\n"
+                "  aws configure --profile reachy-mini\n"
                 f"Original error: {e}"
             )
         # Re-raise other errors (network issues, permission errors, etc.)
@@ -58,31 +48,21 @@ def get_polly_client():
 
 
 def get_transcribe_client():
-    """Get AWS Transcribe client with credentials from environment or AWS credentials file."""
-    aws_access_key_id = os.getenv("AWS_ACCESS_KEY_ID")
-    aws_secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+    """Get AWS Transcribe client using the 'reachy-mini' AWS profile."""
     aws_region = os.getenv("AWS_REGION", "eu-west-1")
+    aws_profile = "reachy-mini"  # Use the reachy-mini profile
 
-    # If credentials provided via environment variables, use them explicitly
-    if aws_access_key_id and aws_secret_access_key:
-        return boto3.client(
-            "transcribe",
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            region_name=aws_region,
-        )
-    
-    # Otherwise, use boto3's default credential chain (checks ~/.aws/credentials, IAM roles, etc.)
-    # This will work if credentials are configured via 'aws configure'
+    # Use boto3 Session with the reachy-mini profile
+    # This will work if credentials are configured via 'aws configure --profile reachy-mini'
     try:
-        return boto3.client("transcribe", region_name=aws_region)
+        session = boto3.Session(profile_name=aws_profile)
+        return session.client("transcribe", region_name=aws_region)
     except Exception as e:
         error_msg = str(e)
-        if "Unable to locate credentials" in error_msg or "NoCredentialsError" in error_msg:
+        if "Unable to locate credentials" in error_msg or "NoCredentialsError" in error_msg or "ProfileNotFound" in error_msg:
             raise ValueError(
-                "AWS credentials not found. Please configure credentials using:\n"
-                "  1. Environment variables: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY\n"
-                "  2. AWS credentials file: Run 'aws configure' or create ~/.aws/credentials\n"
+                f"AWS profile 'reachy-mini' not found. Please configure credentials using:\n"
+                "  aws configure --profile reachy-mini\n"
                 f"Original error: {e}"
             )
         # Re-raise other errors (network issues, permission errors, etc.)
