@@ -136,3 +136,4 @@ robot.media.speak(command["text"])
 - ✅ Check app entry point in `pyproject.toml`
 - ✅ Verify robot daemon is running
 
+

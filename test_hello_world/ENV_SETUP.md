@@ -155,3 +155,4 @@ region = eu-west-1
 
 Then update `utils.py` to use boto3's default credential chain (which will check the credentials file automatically).
 
+
