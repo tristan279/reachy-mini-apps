@@ -7,23 +7,45 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+# Log immediately when module is imported
+print("=" * 50)
+print("speaking_server.main module is being imported...")
+print("=" * 50)
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import uvicorn
 
+print("FastAPI and uvicorn imported successfully")
+
 from reachy_mini import ReachyMini, ReachyMiniApp
+
+print("ReachyMini and ReachyMiniApp imported successfully")
 
 # Try to import from installed package first, then fall back to local path
 try:
     from test_hello_world.utils import speak as aws_speak
-except ImportError:
+    print("Successfully imported aws_speak from test_hello_world.utils")
+except ImportError as e:
+    print(f"Failed to import from installed package: {e}")
     # If not installed, add local path
     sys.path.insert(0, str(Path(__file__).parent.parent.parent / "test_hello_world"))
-    from test_hello_world.utils import speak as aws_speak
+    try:
+        from test_hello_world.utils import speak as aws_speak
+        print("Successfully imported aws_speak from local path")
+    except ImportError as e2:
+        print(f"Failed to import from local path: {e2}")
+        raise
 
 # Set up logging to both file and console
 LOG_FILE = "/tmp/speaking_server.log"
+
+# Write immediately to file to verify it works
+with open(LOG_FILE, "a") as f:
+    f.write(f"\n{'='*50}\n")
+    f.write(f"Module imported at: {__file__}\n")
+    f.write(f"{'='*50}\n")
 
 # Remove any existing handlers to avoid duplicates
 logging.getLogger().handlers = []
@@ -52,7 +74,8 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 # Log that logging is set up
-log_print(f"Logging initialized. Log file: {LOG_FILE}", "DEBUG")
+print(f"Logging initialized. Log file: {LOG_FILE}")
+logger.info(f"Logging initialized. Log file: {LOG_FILE}")
 
 
 def log_print(message: str, level: str = "INFO"):
@@ -87,8 +110,32 @@ class SpeakingServer(ReachyMiniApp):
     # Optional: URL to a custom configuration page for the app
     custom_app_url: str | None = "http://0.0.0.0:8001"
     
+    def __init__(self, *args, **kwargs):
+        """Initialize the SpeakingServer app."""
+        print("SpeakingServer.__init__() called")
+        logger.info("SpeakingServer.__init__() called")
+        try:
+            super().__init__(*args, **kwargs)
+            print("SpeakingServer.__init__() completed")
+            logger.info("SpeakingServer.__init__() completed")
+        except Exception as e:
+            print(f"ERROR in SpeakingServer.__init__(): {e}")
+            logger.error(f"ERROR in SpeakingServer.__init__(): {e}", exc_info=True)
+            raise
+    
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event):
         """Run the speaking server with the provided ReachyMini instance."""
+        # Write immediately to verify run() is called
+        with open(LOG_FILE, "a") as f:
+            f.write(f"\n{'='*50}\n")
+            f.write(f"SpeakingServer.run() CALLED!\n")
+            f.write(f"ReachyMini: {reachy_mini}\n")
+            f.write(f"Stop event: {stop_event}\n")
+            f.write(f"{'='*50}\n")
+        
+        print("=" * 50)
+        print("SpeakingServer.run() CALLED!")
+        print("=" * 50)
         log_print("=" * 50, "DEBUG")
         log_print("SpeakingServer.run() called", "DEBUG")
         log_print(f"ReachyMini instance: {reachy_mini}", "DEBUG")
@@ -98,12 +145,11 @@ class SpeakingServer(ReachyMiniApp):
         log_print(f"Logs are being written to: {LOG_FILE}")
         log_print("=" * 50, "DEBUG")
         
-        # Create FastAPI app
-        log_print("Creating FastAPI application...", "DEBUG")
-        app = FastAPI(title="Speaking Server", description="Text-to-speech server using AWS Polly")
-        log_print("FastAPI app created successfully", "DEBUG")
+        # Use self.settings_app (provided by ReachyMiniApp) instead of creating new FastAPI app
+        log_print("Setting up endpoints on settings_app...", "DEBUG")
+        log_print(f"settings_app type: {type(self.settings_app)}", "DEBUG")
         
-        @app.get("/")
+        @self.settings_app.get("/")
         def root():
             """Root endpoint with server information."""
             log_print("GET / endpoint called", "DEBUG")
@@ -118,7 +164,7 @@ class SpeakingServer(ReachyMiniApp):
             log_print(f"GET / response: {response}", "DEBUG")
             return response
         
-        @app.get("/health")
+        @self.settings_app.get("/health")
         def health():
             """Health check endpoint."""
             log_print("GET /health endpoint called", "DEBUG")
@@ -126,7 +172,7 @@ class SpeakingServer(ReachyMiniApp):
             log_print(f"GET /health response: {response}", "DEBUG")
             return response
         
-        @app.post("/speak", response_model=SpeakResponse)
+        @self.settings_app.post("/speak", response_model=SpeakResponse)
         def speak_text(request: SpeakRequest):
             """Convert text to speech using AWS Polly."""
             log_print("=" * 50, "DEBUG")
@@ -182,76 +228,35 @@ class SpeakingServer(ReachyMiniApp):
                     detail=f"Error generating speech: {str(e)}"
                 )
         
-        @app.get("/speak/{file_path:path}")
+        @self.settings_app.get("/speak/{file_path:path}")
         def get_audio_file(file_path: str):
             """Serve the generated audio file."""
+            log_print(f"GET /speak/{file_path} endpoint called", "DEBUG")
             full_path = Path(file_path)
             
             if not full_path.exists():
+                log_print(f"Audio file not found: {file_path}", "ERROR")
                 raise HTTPException(status_code=404, detail="Audio file not found")
             
             if not full_path.is_file():
+                log_print(f"Path is not a file: {file_path}", "ERROR")
                 raise HTTPException(status_code=400, detail="Path is not a file")
             
+            log_print(f"Serving audio file: {file_path}", "DEBUG")
             return FileResponse(
                 path=full_path,
                 media_type="audio/mpeg",
                 filename=full_path.name
             )
         
-        # Start the server in a separate thread
-        def run_server():
-            log_print("=" * 50, "DEBUG")
-            log_print("run_server() function called", "DEBUG")
-            log_print(f"custom_app_url: {self.custom_app_url}", "DEBUG")
-            log_print(f"Starting HTTP server on {self.custom_app_url}")
-            log_print(f"API documentation: {self.custom_app_url}/docs")
-            
-            host = "0.0.0.0"
-            port = 8001  # Default port
-            
-            # Parse port from custom_app_url if provided
-            if self.custom_app_url:
-                try:
-                    from urllib.parse import urlparse
-                    parsed = urlparse(self.custom_app_url)
-                    log_print(f"Parsed URL: {parsed}", "DEBUG")
-                    if parsed.port:
-                        port = parsed.port
-                        log_print(f"Using port from URL: {port}", "DEBUG")
-                    else:
-                        log_print(f"No port in URL, using default: {port}", "DEBUG")
-                except Exception as e:
-                    log_print(f"Error parsing URL: {e}, using default port {port}", "WARNING")
-            
-            log_print(f"Starting uvicorn server on {host}:{port}", "DEBUG")
-            log_print(f"FastAPI app: {app}", "DEBUG")
-            log_print("=" * 50, "DEBUG")
-            
-            try:
-                uvicorn.run(
-                    app,
-                    host=host,
-                    port=port,
-                    log_level="debug",  # Changed to debug for more verbose logging
-                    access_log=True
-                )
-            except Exception as e:
-                log_print(f"Error starting uvicorn server: {e}", "ERROR")
-                import traceback
-                log_print(traceback.format_exc(), "ERROR")
-                raise
-        
-        log_print("Creating server thread...", "DEBUG")
-        server_thread = threading.Thread(target=run_server, daemon=True)
-        log_print(f"Server thread created: {server_thread}", "DEBUG")
-        log_print("Starting server thread...", "DEBUG")
-        server_thread.start()
-        log_print(f"Server thread started. Is alive: {server_thread.is_alive()}", "DEBUG")
-        
+        log_print("Endpoints registered on settings_app", "DEBUG")
+        log_print(f"Web interface available at: {self.custom_app_url}")
         log_print("Speaking Server started")
         log_print("=" * 50, "DEBUG")
         log_print("Entering main event loop...", "DEBUG")
+        
+        with open(LOG_FILE, "a") as f:
+            f.write("Endpoints registered, entering main event loop...\n")
         
         try:
             # Wait for stop event
