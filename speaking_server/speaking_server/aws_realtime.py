@@ -57,6 +57,10 @@ class AwsRealtimeHandler:
         self.log_print = log_print_func or print
         self.use_vad = use_vad and HAS_VAD
         
+        # Audio processing - set sample rates before VAD initialization
+        self.input_sample_rate = 16000  # AWS Transcribe requirement
+        self.output_queue = asyncio.Queue()
+        
         # Initialize VAD if enabled
         if self.use_vad:
             if vad_type == "webrtc" and HAS_WEBRTC_VAD:
@@ -86,10 +90,6 @@ class AwsRealtimeHandler:
         except Exception as e:
             self.log_print(f"Error initializing AWS clients: {e}", "ERROR")
             raise
-        
-        # Audio processing
-        self.input_sample_rate = 16000  # AWS Transcribe requirement
-        self.output_queue = asyncio.Queue()
         
         # State management
         self.transcribe_stream = None
