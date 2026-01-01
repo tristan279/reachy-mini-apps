@@ -98,6 +98,7 @@ class SpeakingServer(ReachyMiniApp):
         """Run in real-time conversation mode with AWS Transcribe + Polly."""
         # Get configuration from environment variables
         aws_region = os.getenv("AWS_REGION", "us-east-1")
+        aws_profile = os.getenv("AWS_PROFILE", "reachy-mini")  # Default to reachy-mini profile
         language_code = os.getenv("TRANSCRIBE_LANGUAGE", "en-US")
         voice_id = os.getenv("POLLY_VOICE", "Joanna")
         engine = os.getenv("POLLY_ENGINE", "neural")
@@ -109,6 +110,7 @@ class SpeakingServer(ReachyMiniApp):
         vad_type = os.getenv("VAD_TYPE", "simple")  # "simple" or "webrtc"
         
         log_print(f"AWS Region: {aws_region}")
+        log_print(f"AWS Profile: {aws_profile}")
         log_print(f"Transcribe Language: {language_code}")
         log_print(f"Polly Voice: {voice_id}, Engine: {engine}")
         if llm_endpoint:
@@ -127,6 +129,7 @@ class SpeakingServer(ReachyMiniApp):
             log_print_func=log_print,
             use_vad=use_vad,
             vad_type=vad_type,
+            aws_profile=aws_profile,
         )
         
         # Create LocalStream

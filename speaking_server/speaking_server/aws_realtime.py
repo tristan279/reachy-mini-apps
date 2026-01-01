@@ -46,6 +46,7 @@ class AwsRealtimeHandler:
         log_print_func=None,
         use_vad: bool = True,  # Enable VAD to save costs
         vad_type: str = "simple",  # "simple" or "webrtc"
+        aws_profile: Optional[str] = "reachy-mini",  # AWS profile name
     ):
         self.region_name = region_name
         self.language_code = language_code
@@ -56,6 +57,7 @@ class AwsRealtimeHandler:
         self.output_sample_rate = output_sample_rate
         self.log_print = log_print_func or print
         self.use_vad = use_vad and HAS_VAD
+        self.aws_profile = aws_profile
         
         # Audio processing - set sample rates before VAD initialization
         self.input_sample_rate = 16000  # AWS Transcribe requirement
@@ -74,18 +76,39 @@ class AwsRealtimeHandler:
             if use_vad:
                 self.log_print("VAD requested but not available. Install webrtcvad for better accuracy.")
         
-        # AWS clients
+        # AWS clients - use profile if specified
         try:
+            # Create boto3 session with profile
+            if self.aws_profile:
+                session = boto3.Session(profile_name=self.aws_profile)
+                self.log_print(f"Using AWS profile: {self.aws_profile}")
+            else:
+                session = boto3.Session()
+                self.log_print("Using default AWS credentials")
+            
             if HAS_AMAZON_TRANSCRIBE:
-                self.transcribe_client = TranscribeStreamingClient(region=region_name)
+                # amazon-transcribe library - get credentials from session
+                credentials = session.get_credentials()
+                if credentials:
+                    self.transcribe_client = TranscribeStreamingClient(
+                        region=region_name,
+                        credentials={
+                            'access_key_id': credentials.access_key,
+                            'secret_access_key': credentials.secret_key,
+                            'session_token': credentials.token if hasattr(credentials, 'token') else None,
+                        }
+                    )
+                else:
+                    self.transcribe_client = TranscribeStreamingClient(region=region_name)
                 self.log_print("Using amazon-transcribe library for streaming")
             else:
-                self.transcribe_client = boto3.client(
+                self.transcribe_client = session.client(
                     'transcribe-streaming',
                     region_name=region_name
                 )
                 self.log_print("Using boto3 for transcribe streaming (consider installing amazon-transcribe for better async support)")
-            self.polly_client = boto3.client('polly', region_name=region_name)
+            
+            self.polly_client = session.client('polly', region_name=region_name)
             self.log_print("AWS clients initialized successfully")
         except Exception as e:
             self.log_print(f"Error initializing AWS clients: {e}", "ERROR")
