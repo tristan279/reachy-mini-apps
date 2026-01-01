@@ -191,7 +191,37 @@ async function replayRecording() {
     }
 }
 
-document.getElementById("record-btn").addEventListener("click", toggleRecording);
-document.getElementById("replay-btn").addEventListener("click", replayRecording);
+// Wait for DOM to be ready before attaching event listeners
+function initRecordingButtons() {
+    console.log("[RECORDING] Initializing recording buttons...");
+    
+    const recordBtn = document.getElementById("record-btn");
+    const replayBtn = document.getElementById("replay-btn");
+    
+    if (!recordBtn) {
+        console.error("[RECORDING] record-btn element not found!");
+        return;
+    }
+    
+    if (!replayBtn) {
+        console.error("[RECORDING] replay-btn element not found!");
+        return;
+    }
+    
+    console.log("[RECORDING] Found buttons, attaching event listeners");
+    recordBtn.addEventListener("click", toggleRecording);
+    replayBtn.addEventListener("click", replayRecording);
+    console.log("[RECORDING] Event listeners attached successfully");
+}
 
-updateUI();
+// Initialize when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+        initRecordingButtons();
+        updateUI();
+    });
+} else {
+    // DOM is already ready
+    initRecordingButtons();
+    updateUI();
+}
