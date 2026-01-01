@@ -282,10 +282,10 @@ class AwsRealtimeHandler:
             self.log_print(f"Error sending audio to Transcribe: {e}", "ERROR")
     
     async def _keepalive_loop(self):
-        """Send periodic silence packets to keep connection alive."""
+        """Send periodic keepalive: bot says 'ping' and sends silence packet to AWS."""
         while self.is_connected:
             try:
-                # Wait for keepalive interval
+                # Wait for keepalive interval (10 seconds)
                 await asyncio.sleep(self._keepalive_interval)
                 
                 # Check if we need to send keepalive
@@ -294,24 +294,27 @@ class AwsRealtimeHandler:
                 
                 time_since_last_audio = time.time() - self._last_audio_sent_time
                 
-                # Only send keepalive if:
-                # 1. Connection is active
-                # 2. No audio sent recently (idle period)
-                # 3. VAD is enabled (to save costs when not speaking)
+                # Only send keepalive if idle and VAD is enabled
                 if (time_since_last_audio >= self._keepalive_interval and 
                     self.is_connected and 
                     self.input_stream and
                     self.use_vad):
                     
-                    # Send minimal silence packet (100ms of silence)
-                    # This is very small cost but keeps connection alive
+                    # 1. Bot says "ping" to indicate it's listening
+                    try:
+                        await self._generate_tts_audio("ping")
+                        self.log_print("Bot: ping (keepalive)")
+                    except Exception as e:
+                        self.log_print(f"Error generating ping TTS: {e}", "ERROR")
+                    
+                    # 2. Send minimal silence packet to AWS to keep connection alive
                     silence_duration_ms = 100  # 100ms of silence
                     silence_samples = int(self.input_sample_rate * silence_duration_ms / 1000)
                     silence_audio = np.zeros(silence_samples, dtype=np.int16)
                     
                     try:
                         await self._send_audio_chunk(silence_audio)
-                        self.log_print(f"Sent keepalive silence packet (idle for {time_since_last_audio:.1f}s)")
+                        self.log_print(f"Sent keepalive to AWS (idle for {time_since_last_audio:.1f}s)")
                     except Exception as e:
                         self.log_print(f"Error sending keepalive: {e}", "ERROR")
                         
@@ -390,11 +393,11 @@ class AwsRealtimeHandler:
                         transcript_text = result.alternatives[0].transcript
                         if result.is_partial:
                             self.partial_transcript = transcript_text
-                            self.log_print(f"Partial: {transcript_text}")
+                            self.log_print(f"[TRANSCRIPT - PARTIAL] User: {transcript_text}")
                         else:
                             self.current_transcript = transcript_text
                             self.partial_transcript = ""
-                            self.log_print(f"Final: {transcript_text}")
+                            self.log_print(f"[TRANSCRIPT - FINAL] User said: \"{transcript_text}\"")
                             await self._process_transcript(transcript_text)
     
     async def _process_transcript(self, transcript: str):
@@ -404,10 +407,13 @@ class AwsRealtimeHandler:
         
         self.last_activity_time = time.time()
         
+        self.log_print(f"[PROCESSING] Getting response for: \"{transcript}\"")
+        
         # Get LLM response
         llm_response = await self._get_llm_response(transcript)
         
         if llm_response:
+            self.log_print(f"[RESPONSE] Bot will say: \"{llm_response}\"")
             # Generate TTS audio
             await self._generate_tts_audio(llm_response)
     
@@ -544,11 +550,11 @@ if HAS_AMAZON_TRANSCRIBE:
                     transcript_text = result.alternatives[0].transcript
                     if result.is_partial:
                         self.handler.partial_transcript = transcript_text
-                        self.log_print(f"Partial: {transcript_text}")
+                        self.log_print(f"[TRANSCRIPT - PARTIAL] User: {transcript_text}")
                     else:
                         self.handler.current_transcript = transcript_text
                         self.handler.partial_transcript = ""
-                        self.log_print(f"Final: {transcript_text}")
+                        self.log_print(f"[TRANSCRIPT - FINAL] User said: \"{transcript_text}\"")
                         await self.handler._process_transcript(transcript_text)
 else:
     # Dummy class if amazon-transcribe is not available
