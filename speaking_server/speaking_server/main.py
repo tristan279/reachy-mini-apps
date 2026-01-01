@@ -18,6 +18,7 @@ from reachy_mini import ReachyMini, ReachyMiniApp
 # Import conversation components
 from .aws_realtime import AwsRealtimeHandler
 from .console import LocalStream
+from .simple_recorder import SimpleRecorder
 
 # Try to import from installed package first, then fall back to local path
 try:
@@ -272,6 +273,97 @@ class SpeakingServer(ReachyMiniApp):
                 media_type="audio/mpeg",
                 filename=full_path.name
             )
+        
+        # Simple recording endpoints (no AWS transcription yet)
+        simple_recorder = None
+        
+        def init_simple_recording():
+            """Initialize simple recording components."""
+            nonlocal simple_recorder
+            
+            if simple_recorder is None:
+                # Create recorder (no AWS handler needed yet)
+                simple_recorder = SimpleRecorder(
+                    robot=reachy_mini,
+                    log_print_func=log_print,
+                )
+                
+                log_print("[SIMPLE RECORDER] Initialized (no transcription)")
+            
+            return simple_recorder
+        
+        @self.settings_app.post("/recording/start")
+        def start_recording():
+            """Start recording audio."""
+            try:
+                recorder = init_simple_recording()
+                
+                # Start recording in async context
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(recorder.start_recording())
+                
+                log_print("[RECORDING] Started")
+                return {"status": "recording", "message": "Recording started"}
+            except Exception as e:
+                log_print(f"[RECORDING] Error starting: {e}", "ERROR")
+                import traceback
+                log_print(traceback.format_exc(), "ERROR")
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.settings_app.post("/recording/stop")
+        def stop_recording():
+            """Stop recording."""
+            try:
+                if simple_recorder is None:
+                    raise HTTPException(status_code=400, detail="Recording not initialized")
+                
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(simple_recorder.stop_recording())
+                
+                status = simple_recorder.get_status()
+                log_print(f"[RECORDING] Stopped. Recorded {status['frames_recorded']} frames ({status['audio_duration']:.2f}s)")
+                
+                return {
+                    "status": "stopped",
+                    "frames_recorded": status["frames_recorded"],
+                    "audio_duration": status["audio_duration"],
+                    "recording_duration": status["recording_duration"],
+                    "total_samples": status["total_samples"],
+                    "sample_rate": status["sample_rate"]
+                }
+            except Exception as e:
+                log_print(f"[RECORDING] Error stopping: {e}", "ERROR")
+                import traceback
+                log_print(traceback.format_exc(), "ERROR")
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.settings_app.post("/recording/replay")
+        def replay_recording():
+            """Replay the recorded audio."""
+            try:
+                if simple_recorder is None:
+                    raise HTTPException(status_code=400, detail="Recording not initialized")
+                
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(simple_recorder.replay_recording())
+                
+                log_print("[RECORDING] Replay started")
+                return {"status": "replaying", "message": "Replaying recorded audio"}
+            except Exception as e:
+                log_print(f"[RECORDING] Error replaying: {e}", "ERROR")
+                import traceback
+                log_print(traceback.format_exc(), "ERROR")
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.settings_app.get("/recording/status")
+        def get_recording_status():
+            """Get current recording status."""
+            if simple_recorder is None:
+                return {"status": "not_initialized"}
+            return simple_recorder.get_status()
         
         log_print("Endpoints mounted successfully")
         log_print(f"API available at: {self.custom_app_url}")
