@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+import os
 import time
 from typing import Optional, Tuple, Dict, Any
 import numpy as np
@@ -87,17 +88,22 @@ class AwsRealtimeHandler:
                 self.log_print("Using default AWS credentials")
             
             if HAS_AMAZON_TRANSCRIBE:
-                # amazon-transcribe library - get credentials from session
-                credentials = session.get_credentials()
-                if credentials:
-                    self.transcribe_client = TranscribeStreamingClient(
-                        region=region_name,
-                        credentials={
-                            'access_key_id': credentials.access_key,
-                            'secret_access_key': credentials.secret_key,
-                            'session_token': credentials.token if hasattr(credentials, 'token') else None,
-                        }
-                    )
+                # amazon-transcribe library uses boto3 credential chain
+                # Set AWS_PROFILE in environment so it picks up the profile
+                if self.aws_profile:
+                    # Store original if exists, then set our profile
+                    original_profile = os.environ.get('AWS_PROFILE')
+                    os.environ['AWS_PROFILE'] = self.aws_profile
+                    try:
+                        self.transcribe_client = TranscribeStreamingClient(region=region_name)
+                    except Exception as e:
+                        # Restore original on error
+                        if original_profile:
+                            os.environ['AWS_PROFILE'] = original_profile
+                        elif 'AWS_PROFILE' in os.environ:
+                            del os.environ['AWS_PROFILE']
+                        raise
+                    # Keep the profile set (don't restore) so it's available for the session
                 else:
                     self.transcribe_client = TranscribeStreamingClient(region=region_name)
                 self.log_print("Using amazon-transcribe library for streaming")

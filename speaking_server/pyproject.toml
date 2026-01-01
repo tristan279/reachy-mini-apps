@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "speaking_server"
-version = "0.2.4"
+version = "0.2.5"
 description = "Speaking Server with AWS Transcribe and Polly for Reachy Mini"
 readme = "README.md"
 requires-python = ">=3.10"
