@@ -85,8 +85,8 @@ class SpeakingServer(ReachyMiniApp):
         log_print(f"Logs are being written to: {LOG_FILE}")
         log_print("=" * 50)
         
-        # Check if conversation mode is enabled (default: true)
-        conversation_mode = os.getenv("CONVERSATION_MODE", "true").lower() == "true"
+        # Check if conversation mode is enabled (default: false - use simple recording)
+        conversation_mode = os.getenv("CONVERSATION_MODE", "false").lower() == "true"
         
         if conversation_mode:
             log_print("Starting in CONVERSATION MODE")
