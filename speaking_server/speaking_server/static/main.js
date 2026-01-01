@@ -48,36 +48,74 @@ document.getElementById("sound-btn").addEventListener("click", () => {
 let isRecording = false;
 
 async function toggleRecording() {
+    console.log("[RECORDING] Button clicked, isRecording:", isRecording);
     const btn = document.getElementById("record-btn");
     const statusDiv = document.getElementById("recording-status");
+    const infoDiv = document.getElementById("recording-info");
     
     if (!isRecording) {
         // Start recording
+        console.log("[RECORDING] Starting recording...");
+        btn.disabled = true; // Disable button while processing
+        statusDiv.textContent = "⏳ Starting...";
+        statusDiv.style.color = "#666";
+        
         try {
+            console.log("[RECORDING] Sending POST /recording/start");
             const resp = await fetch("/recording/start", { method: "POST" });
+            console.log("[RECORDING] Response status:", resp.status);
+            
+            if (!resp.ok) {
+                const errorText = await resp.text();
+                throw new Error(`Server error: ${resp.status} - ${errorText}`);
+            }
+            
             const data = await resp.json();
+            console.log("[RECORDING] Response data:", data);
+            
             isRecording = true;
             btn.textContent = "Stop Recording";
             btn.style.background = "#f44336";
+            btn.disabled = false;
             statusDiv.textContent = "🔴 Recording...";
             statusDiv.style.color = "#f44336";
+            infoDiv.innerHTML = "<em>Recording in progress...</em>";
         } catch (e) {
+            console.error("[RECORDING] Error:", e);
             statusDiv.textContent = "Error: " + e.message;
             statusDiv.style.color = "#f44336";
+            btn.disabled = false;
+            btn.textContent = "Start Recording";
+            btn.style.background = "#4CAF50";
         }
     } else {
         // Stop recording
+        console.log("[RECORDING] Stopping recording...");
+        btn.disabled = true;
+        statusDiv.textContent = "⏳ Stopping...";
+        statusDiv.style.color = "#666";
+        
         try {
+            console.log("[RECORDING] Sending POST /recording/stop");
             const resp = await fetch("/recording/stop", { method: "POST" });
+            console.log("[RECORDING] Response status:", resp.status);
+            
+            if (!resp.ok) {
+                const errorText = await resp.text();
+                throw new Error(`Server error: ${resp.status} - ${errorText}`);
+            }
+            
             const data = await resp.json();
+            console.log("[RECORDING] Response data:", data);
+            
             isRecording = false;
             btn.textContent = "Start Recording";
             btn.style.background = "#4CAF50";
+            btn.disabled = false;
             statusDiv.textContent = "⏹️ Stopped";
             statusDiv.style.color = "#666";
             
             // Display recording info
-            const infoDiv = document.getElementById("recording-info");
             const replayBtn = document.getElementById("replay-btn");
             
             if (data.frames_recorded > 0) {
@@ -95,8 +133,10 @@ async function toggleRecording() {
                 replayBtn.disabled = true;
             }
         } catch (e) {
+            console.error("[RECORDING] Error:", e);
             statusDiv.textContent = "Error: " + e.message;
             statusDiv.style.color = "#f44336";
+            btn.disabled = false;
         }
     }
 }
@@ -116,21 +156,37 @@ setInterval(async () => {
 }, 1000);
 
 async function replayRecording() {
+    console.log("[RECORDING] Replay button clicked");
     const replayBtn = document.getElementById("replay-btn");
     const statusDiv = document.getElementById("recording-status");
     
+    replayBtn.disabled = true;
+    statusDiv.textContent = "⏳ Starting replay...";
+    statusDiv.style.color = "#666";
+    
     try {
-        replayBtn.disabled = true;
-        statusDiv.textContent = "▶️ Replaying...";
+        console.log("[RECORDING] Sending POST /recording/replay");
         const resp = await fetch("/recording/replay", { method: "POST" });
+        console.log("[RECORDING] Response status:", resp.status);
+        
+        if (!resp.ok) {
+            const errorText = await resp.text();
+            throw new Error(`Server error: ${resp.status} - ${errorText}`);
+        }
+        
         const data = await resp.json();
-        statusDiv.textContent = "▶️ Replay started";
+        console.log("[RECORDING] Response data:", data);
+        
+        statusDiv.textContent = "▶️ Replaying...";
+        statusDiv.style.color = "#2196F3";
         setTimeout(() => {
             statusDiv.textContent = "";
             replayBtn.disabled = false;
         }, 2000);
     } catch (e) {
+        console.error("[RECORDING] Error:", e);
         statusDiv.textContent = "Error: " + e.message;
+        statusDiv.style.color = "#f44336";
         replayBtn.disabled = false;
     }
 }

@@ -293,16 +293,11 @@ class SpeakingServer(ReachyMiniApp):
             return simple_recorder
         
         @self.settings_app.post("/recording/start")
-        def start_recording():
+        async def start_recording():
             """Start recording audio."""
             try:
                 recorder = init_simple_recording()
-                
-                # Start recording in async context
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(recorder.start_recording())
-                
+                await recorder.start_recording()
                 log_print("[RECORDING] Started")
                 return {"status": "recording", "message": "Recording started"}
             except Exception as e:
@@ -312,15 +307,13 @@ class SpeakingServer(ReachyMiniApp):
                 raise HTTPException(status_code=500, detail=str(e))
         
         @self.settings_app.post("/recording/stop")
-        def stop_recording():
+        async def stop_recording():
             """Stop recording."""
             try:
                 if simple_recorder is None:
                     raise HTTPException(status_code=400, detail="Recording not initialized")
                 
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(simple_recorder.stop_recording())
+                await simple_recorder.stop_recording()
                 
                 status = simple_recorder.get_status()
                 log_print(f"[RECORDING] Stopped. Recorded {status['frames_recorded']} frames ({status['audio_duration']:.2f}s)")
@@ -340,15 +333,14 @@ class SpeakingServer(ReachyMiniApp):
                 raise HTTPException(status_code=500, detail=str(e))
         
         @self.settings_app.post("/recording/replay")
-        def replay_recording():
+        async def replay_recording():
             """Replay the recorded audio."""
             try:
                 if simple_recorder is None:
                     raise HTTPException(status_code=400, detail="Recording not initialized")
                 
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(simple_recorder.replay_recording())
+                # Run replay in background so it doesn't block the response
+                asyncio.create_task(simple_recorder.replay_recording())
                 
                 log_print("[RECORDING] Replay started")
                 return {"status": "replaying", "message": "Replaying recorded audio"}
