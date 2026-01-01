@@ -277,8 +277,12 @@ class AwsRealtimeHandler:
                 self.is_connected = True
                 self.log_print("AWS Transcribe stream connected (amazon-transcribe)")
                 
-                # Create event handler
-                event_handler = TranscriptEventHandler(self, self.log_print)
+                # Create event handler - must pass the output stream
+                event_handler = TranscriptEventHandler(
+                    transcript_result_stream=self.output_stream,
+                    handler=self,
+                    log_print_func=self.log_print
+                )
                 
                 # Process events from the stream
                 # Note: When using VAD, we may need to restart the stream for each speech segment
@@ -456,8 +460,8 @@ if HAS_AMAZON_TRANSCRIBE:
     class TranscriptEventHandler(TranscriptResultStreamHandler):
         """Event handler for AWS Transcribe streaming results."""
         
-        def __init__(self, handler, log_print_func):
-            super().__init__()
+        def __init__(self, transcript_result_stream, handler, log_print_func):
+            super().__init__(transcript_result_stream)
             self.handler = handler
             self.log_print = log_print_func
         
