@@ -140,26 +140,47 @@ class AwsRealtimeHandler:
         self._vad_speech_buffer = []  # Buffer audio during speech
         self._streaming_active = False  # Whether we're currently streaming to AWS
         
+        # Keepalive state (to prevent 15-second timeout)
+        self._last_audio_sent_time = time.time()
+        self._keepalive_task = None
+        self._keepalive_interval = 10.0  # Send keepalive every 10 seconds (before 15s timeout)
+        
     async def start(self):
         """Start the transcription session."""
         if self.transcribe_task is None or self.transcribe_task.done():
             self.transcribe_task = asyncio.create_task(self._run_transcribe_session())
+            # Start keepalive task to prevent connection timeout
+            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
             self.log_print("Started AWS Transcribe streaming session")
     
     async def stop(self):
         """Stop the transcription session."""
         self.is_connected = False
-        if self.transcribe_stream:
+        
+        # Cancel keepalive task
+        if self._keepalive_task and not self._keepalive_task.done():
+            self._keepalive_task.cancel()
             try:
-                self.transcribe_stream.close()
+                await self._keepalive_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Close input stream to end transcription (amazon-transcribe pattern)
+        if self.input_stream:
+            try:
+                await self.input_stream.end_stream()
             except Exception as e:
-                self.log_print(f"Error closing transcribe stream: {e}")
+                self.log_print(f"Error ending input stream: {e}")
+        
+        # Cancel the transcription task
         if self.transcribe_task and not self.transcribe_task.done():
             self.transcribe_task.cancel()
             try:
                 await self.transcribe_task
             except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                self.log_print(f"Error cancelling transcribe task: {e}")
     
     async def receive(self, audio_frame: Tuple[int, np.ndarray]):
         """Receive audio frame from LocalStream and send to AWS Transcribe."""
@@ -215,10 +236,11 @@ class AwsRealtimeHandler:
                 if is_speaking:
                     # Still speaking - send audio
                     await self._send_audio_chunk(audio_int16)
+                    self._last_audio_sent_time = time.time()  # Update keepalive timer
                 else:
-                    # Speech ended - stop sending (but keep connection alive)
+                    # Speech ended - stop sending (but keep connection alive via keepalive)
                     self._streaming_active = False
-                    self.log_print("Speech ended - pausing audio transmission (saving costs)")
+                    self.log_print("Speech ended - pausing audio transmission (keepalive will maintain connection)")
             else:
                 # Not currently streaming - buffer audio in case speech starts
                 # This helps capture the beginning of speech
@@ -232,6 +254,7 @@ class AwsRealtimeHandler:
             # No VAD - stream continuously (original behavior)
             # This charges for all audio including silence
             await self._send_audio_chunk(audio_int16)
+            self._last_audio_sent_time = time.time()  # Update keepalive timer
     
     async def _send_audio_chunk(self, audio_int16: np.ndarray):
         """Send audio chunk to AWS Transcribe."""
@@ -254,8 +277,49 @@ class AwsRealtimeHandler:
                 # Send chunk through the input stream
                 if HAS_AMAZON_TRANSCRIBE:
                     await self.input_stream.send_audio_event(audio_chunk=chunk)
+                    self._last_audio_sent_time = time.time()  # Update keepalive timer
         except Exception as e:
             self.log_print(f"Error sending audio to Transcribe: {e}", "ERROR")
+    
+    async def _keepalive_loop(self):
+        """Send periodic silence packets to keep connection alive."""
+        while self.is_connected:
+            try:
+                # Wait for keepalive interval
+                await asyncio.sleep(self._keepalive_interval)
+                
+                # Check if we need to send keepalive
+                if not self.is_connected:
+                    break
+                
+                time_since_last_audio = time.time() - self._last_audio_sent_time
+                
+                # Only send keepalive if:
+                # 1. Connection is active
+                # 2. No audio sent recently (idle period)
+                # 3. VAD is enabled (to save costs when not speaking)
+                if (time_since_last_audio >= self._keepalive_interval and 
+                    self.is_connected and 
+                    self.input_stream and
+                    self.use_vad):
+                    
+                    # Send minimal silence packet (100ms of silence)
+                    # This is very small cost but keeps connection alive
+                    silence_duration_ms = 100  # 100ms of silence
+                    silence_samples = int(self.input_sample_rate * silence_duration_ms / 1000)
+                    silence_audio = np.zeros(silence_samples, dtype=np.int16)
+                    
+                    try:
+                        await self._send_audio_chunk(silence_audio)
+                        self.log_print(f"Sent keepalive silence packet (idle for {time_since_last_audio:.1f}s)")
+                    except Exception as e:
+                        self.log_print(f"Error sending keepalive: {e}", "ERROR")
+                        
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.log_print(f"Error in keepalive loop: {e}", "ERROR")
+                await asyncio.sleep(1)  # Wait before retrying
     
     async def _run_transcribe_session(self):
         """Run AWS Transcribe Streaming session."""
@@ -287,7 +351,14 @@ class AwsRealtimeHandler:
                 # Process events from the stream
                 # Note: When using VAD, we may need to restart the stream for each speech segment
                 # For now, we'll keep the stream open and let AWS handle it
-                await event_handler.handle_events()
+                try:
+                    await event_handler.handle_events()
+                except asyncio.CancelledError:
+                    self.log_print("Transcription session cancelled")
+                    raise
+                except Exception as e:
+                    self.log_print(f"Error in event handler: {e}", "ERROR")
+                    raise
             else:
                 # Fallback: Use boto3 (simpler but less async-friendly)
                 self.log_print("Warning: amazon-transcribe not installed. Using basic boto3 mode.")
