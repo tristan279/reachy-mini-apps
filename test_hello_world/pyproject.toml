@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "test_hello_world"
-version = "0.1.17"
+version = "0.2.0"
 authors = [{ name = "Tristan Dhoedt", email = "tristandhoedt@gmail.com" }]
 description = ""
 readme = "README.md"
@@ -13,13 +13,6 @@ dependencies = [
     # Reachy mini
     "reachy_mini>=1.2.3rc1",
     "eclipse-zenoh~=1.7.0",
-    # Text-to-speech
-    "gtts>=2.5.0",
-    # Audio processing
-    "pydub>=0.25.1",
-    "scipy>=1.11.0",
-    # AWS services
-    "boto3>=1.34.0",
 ]
 
 [project.optional-dependencies]
