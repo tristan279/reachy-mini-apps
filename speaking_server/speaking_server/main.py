@@ -9,10 +9,9 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-import uvicorn
 
 from reachy_mini import ReachyMini, ReachyMiniApp
 
@@ -194,10 +193,10 @@ class SpeakingServer(ReachyMiniApp):
     def _run_http_server_mode(self, reachy_mini: ReachyMini, stop_event: threading.Event):
         """Run in HTTP server mode (original functionality)."""
         
-        # Create FastAPI app
-        app = FastAPI(title="Speaking Server", description="Text-to-speech server using AWS Polly")
+        # Mount endpoints to existing settings_app (no new server needed)
+        log_print("Mounting endpoints to existing server...")
         
-        @app.get("/")
+        @self.settings_app.get("/")
         def root():
             """Root endpoint with server information."""
             return {
@@ -205,16 +204,17 @@ class SpeakingServer(ReachyMiniApp):
                 "description": "Text-to-speech server using AWS Polly",
                 "endpoints": {
                     "POST /speak": "Convert text to speech",
-                    "GET /health": "Health check"
+                    "GET /health": "Health check",
+                    "GET /speak/{file_path}": "Get audio file"
                 }
             }
         
-        @app.get("/health")
+        @self.settings_app.get("/health")
         def health():
             """Health check endpoint."""
             return {"status": "healthy"}
         
-        @app.post("/speak", response_model=SpeakResponse)
+        @self.settings_app.post("/speak", response_model=SpeakResponse)
         def speak_text(request: SpeakRequest):
             """Convert text to speech using AWS Polly."""
             try:
@@ -253,7 +253,7 @@ class SpeakingServer(ReachyMiniApp):
                     detail=f"Error generating speech: {str(e)}"
                 )
         
-        @app.get("/speak/{file_path:path}")
+        @self.settings_app.get("/speak/{file_path:path}")
         def get_audio_file(file_path: str):
             """Serve the generated audio file."""
             full_path = Path(file_path)
@@ -270,36 +270,9 @@ class SpeakingServer(ReachyMiniApp):
                 filename=full_path.name
             )
         
-        # Start the server in a separate thread
-        def run_server():
-            log_print(f"Starting HTTP server on {self.custom_app_url}")
-            log_print(f"API documentation: {self.custom_app_url}/docs")
-            
-            host = "0.0.0.0"
-            port = 8001  # Default port
-            
-            # Parse port from custom_app_url if provided
-            if self.custom_app_url:
-                try:
-                    from urllib.parse import urlparse
-                    parsed = urlparse(self.custom_app_url)
-                    if parsed.port:
-                        port = parsed.port
-                except Exception:
-                    pass
-            
-            uvicorn.run(
-                app,
-                host=host,
-                port=port,
-                log_level="info",
-                access_log=True
-            )
-        
-        server_thread = threading.Thread(target=run_server, daemon=True)
-        server_thread.start()
-        
-        log_print("Speaking Server started")
+        log_print("Endpoints mounted successfully")
+        log_print(f"API available at: {self.custom_app_url}")
+        log_print(f"API documentation: {self.custom_app_url}/docs")
         log_print("=" * 50)
         
         try:
