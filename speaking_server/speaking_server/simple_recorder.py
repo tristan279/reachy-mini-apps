@@ -96,7 +96,17 @@ class SimpleRecorder:
             try:
                 audio_frame = self._robot.media.get_audio_sample()
                 if audio_frame is not None:
-                    sample_rate, audio_data = audio_frame
+                    # Handle different return formats
+                    # After start_recording(), it might return just audio data, not a tuple
+                    if isinstance(audio_frame, tuple):
+                        # Format: (sample_rate, audio_data)
+                        sample_rate, audio_data = audio_frame
+                    else:
+                        # Format: just audio_data (numpy array)
+                        # Get sample rate separately
+                        audio_data = audio_frame
+                        sample_rate = self._robot.media.get_input_audio_samplerate()
+                    
                     self.recorded_audio.append((sample_rate, audio_data))
                     frame_count += 1
                     if frame_count == 1:
@@ -111,6 +121,13 @@ class SimpleRecorder:
                         self.log_print(f"[RECORDER] Still waiting for audio... ({none_count} None returns, {loop_count} total loops)")
             except Exception as e:
                 self.log_print(f"[RECORDER] Error capturing audio: {e}", "ERROR")
+                # Log what we actually got for debugging
+                try:
+                    audio_frame = self._robot.media.get_audio_sample()
+                    if audio_frame is not None:
+                        self.log_print(f"[RECORDER] Debug: audio_frame type={type(audio_frame)}, value={audio_frame}")
+                except:
+                    pass
                 import traceback
                 self.log_print(traceback.format_exc(), "ERROR")
             
