@@ -26,6 +26,14 @@ class SimpleRecorder:
             self.log_print("[RECORDER] Already recording")
             return
         
+        # CRITICAL: Start the microphone before trying to get audio samples
+        try:
+            self._robot.media.start_recording()
+            self.log_print("[RECORDER] Microphone started")
+        except Exception as e:
+            self.log_print(f"[RECORDER] Error starting microphone: {e}", "ERROR")
+            raise
+        
         self.is_recording = True
         self.recorded_audio = []
         self.recording_start_time = time.time()
@@ -41,6 +49,14 @@ class SimpleRecorder:
             return
         
         self.is_recording = False
+        
+        # CRITICAL: Stop the microphone
+        try:
+            self._robot.media.stop_recording()
+            self.log_print("[RECORDER] Microphone stopped")
+        except Exception as e:
+            self.log_print(f"[RECORDER] Error stopping microphone: {e}", "ERROR")
+        
         duration = time.time() - self.recording_start_time if self.recording_start_time else 0
         self.log_print(f"[RECORDER] Stopped recording. Captured {len(self.recorded_audio)} audio frames over {duration:.2f} seconds")
         
@@ -72,23 +88,6 @@ class SimpleRecorder:
                     self.log_print("[RECORDER] WARNING: Robot is in simulation mode - microphone may not work")
         except Exception as e:
             self.log_print(f"[RECORDER] Could not check simulation status: {e}")
-        
-        # Warm-up: Try calling get_audio_sample a few times to see if it starts returning data
-        self.log_print("[RECORDER] Warming up microphone...")
-        warmup_count = 0
-        for _ in range(100):  # Try 100 times
-            try:
-                audio_frame = self._robot.media.get_audio_sample()
-                if audio_frame is not None:
-                    self.log_print(f"[RECORDER] Microphone is active! Got audio on warmup attempt {warmup_count + 1}")
-                    break
-                warmup_count += 1
-            except Exception as e:
-                self.log_print(f"[RECORDER] Error during warmup: {e}")
-            await asyncio.sleep(0.01)
-        
-        if warmup_count == 100:
-            self.log_print("[RECORDER] WARNING: Microphone returned None during warmup. It may need actual audio input (speak into it) or may not be available.")
         
         self.log_print("[RECORDER] Starting recording loop...")
         
@@ -126,34 +125,50 @@ class SimpleRecorder:
             self.log_print("[RECORDER] No audio to replay")
             return
         
+        # CRITICAL: Start the speaker before playing
+        try:
+            self._robot.media.start_playing()
+            self.log_print("[RECORDER] Speaker started")
+        except Exception as e:
+            self.log_print(f"[RECORDER] Error starting speaker: {e}", "ERROR")
+            return
+        
         self.log_print(f"[RECORDER] Replaying {len(self.recorded_audio)} audio frames...")
         
-        for i, (sample_rate, audio_data) in enumerate(self.recorded_audio):
-            try:
-                # Convert to float32 if needed
-                if audio_data.dtype != np.float32:
-                    if audio_data.dtype == np.int16:
-                        audio_float = audio_data.astype(np.float32) / 32767.0
+        try:
+            for i, (sample_rate, audio_data) in enumerate(self.recorded_audio):
+                try:
+                    # Convert to float32 if needed
+                    if audio_data.dtype != np.float32:
+                        if audio_data.dtype == np.int16:
+                            audio_float = audio_data.astype(np.float32) / 32767.0
+                        else:
+                            audio_float = audio_data.astype(np.float32)
                     else:
-                        audio_float = audio_data.astype(np.float32)
-                else:
-                    audio_float = audio_data
-                
-                # Ensure mono
-                if audio_float.ndim == 2:
-                    audio_float = audio_float[:, 0] if audio_float.shape[1] > 0 else audio_float.flatten()
-                
-                # Push to robot speaker
-                self._robot.media.push_audio_sample(audio_float)
-                
-                if i % 50 == 0:  # Log every 50th frame
-                    self.log_print(f"[RECORDER] Replayed {i+1}/{len(self.recorded_audio)} frames")
-                
-                # Small delay to match original timing
-                await asyncio.sleep(0.01)
-                
+                        audio_float = audio_data
+                    
+                    # Ensure mono
+                    if audio_float.ndim == 2:
+                        audio_float = audio_float[:, 0] if audio_float.shape[1] > 0 else audio_float.flatten()
+                    
+                    # Push to robot speaker
+                    self._robot.media.push_audio_sample(audio_float)
+                    
+                    if i % 50 == 0:  # Log every 50th frame
+                        self.log_print(f"[RECORDER] Replayed {i+1}/{len(self.recorded_audio)} frames")
+                    
+                    # Small delay to match original timing
+                    await asyncio.sleep(0.01)
+                    
+                except Exception as e:
+                    self.log_print(f"[RECORDER] Error replaying frame {i}: {e}", "ERROR")
+        finally:
+            # CRITICAL: Stop the speaker after playing
+            try:
+                self._robot.media.stop_playing()
+                self.log_print("[RECORDER] Speaker stopped")
             except Exception as e:
-                self.log_print(f"[RECORDER] Error replaying frame {i}: {e}", "ERROR")
+                self.log_print(f"[RECORDER] Error stopping speaker: {e}", "ERROR")
         
         self.log_print("[RECORDER] Replay complete")
     
