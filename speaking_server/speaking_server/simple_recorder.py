@@ -246,15 +246,9 @@ class SimpleRecorder:
             else:
                 self.log_print(f"[RECORDER] No resampling needed (both rates are {recorded_sample_rate}Hz)")
             
-            # Step 4: Push audio in chunks (matching the original frame timing)
-            # Calculate chunk size based on original frame size at output rate
-            if self.recorded_audio:
-                # Estimate original frame size
-                original_frame_size = len(self.recorded_audio[0][1])
-                # Use round() instead of int() to avoid precision loss
-                chunk_size = round(original_frame_size * output_sample_rate / recorded_sample_rate)
-            else:
-                chunk_size = round(output_sample_rate * 0.01)  # 10ms chunks
+            # Step 4: Push audio in chunks quickly, then sleep for total duration
+            # The audio system handles buffering, so we push quickly and sleep once
+            chunk_size = round(output_sample_rate * 0.01)  # 10ms chunks for smooth pushing
             
             if chunk_size <= 0:
                 self.log_print("[RECORDER] Invalid chunk size, using default")
@@ -263,21 +257,31 @@ class SimpleRecorder:
             self.log_print(f"[RECORDER] Pushing audio in chunks of ~{chunk_size} samples...")
             
             total_pushed = 0
+            start_time = time.time()
+            
+            # Push all chunks quickly (tiny delay just to yield to event loop)
             for i in range(0, len(concatenated_audio), chunk_size):
                 chunk = concatenated_audio[i:i+chunk_size]
                 if len(chunk) > 0:
                     self._robot.media.push_audio_sample(chunk)
                     total_pushed += len(chunk)
                     
-                    # Small delay to prevent overwhelming the audio system
-                    # Calculate delay based on chunk duration at output rate
-                    chunk_duration = len(chunk) / output_sample_rate
-                    await asyncio.sleep(chunk_duration)
+                    # Tiny yield to event loop, not a timing delay
+                    await asyncio.sleep(0)
                     
                     if (i // chunk_size) % 100 == 0:
                         self.log_print(f"[RECORDER] Pushed {total_pushed}/{len(concatenated_audio)} samples ({100*total_pushed/len(concatenated_audio):.1f}%)")
             
-            self.log_print(f"[RECORDER] Finished pushing all {total_pushed} samples")
+            # Calculate total audio duration and sleep for that duration
+            # This matches the example: time.sleep(len(samples) / output_sample_rate)
+            total_duration = len(concatenated_audio) / output_sample_rate
+            self.log_print(f"[RECORDER] Pushed all {total_pushed} samples, sleeping for {total_duration:.3f}s (total audio duration)")
+            
+            # Sleep for the total duration of the audio at the output sample rate
+            await asyncio.sleep(total_duration)
+            
+            elapsed = time.time() - start_time
+            self.log_print(f"[RECORDER] Finished (elapsed: {elapsed:.3f}s, expected: {total_duration:.3f}s)")
                     
         except Exception as e:
             self.log_print(f"[RECORDER] Error during replay: {e}", "ERROR")
