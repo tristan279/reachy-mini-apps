@@ -64,6 +64,34 @@ class SimpleRecorder:
         except Exception as e:
             self.log_print(f"[RECORDER] Could not get input sample rate: {e}")
         
+        # Check if robot is in simulation mode
+        try:
+            if hasattr(self._robot, 'client'):
+                status = self._robot.client.get_status()
+                if status.get("simulation_enabled", False):
+                    self.log_print("[RECORDER] WARNING: Robot is in simulation mode - microphone may not work")
+        except Exception as e:
+            self.log_print(f"[RECORDER] Could not check simulation status: {e}")
+        
+        # Warm-up: Try calling get_audio_sample a few times to see if it starts returning data
+        self.log_print("[RECORDER] Warming up microphone...")
+        warmup_count = 0
+        for _ in range(100):  # Try 100 times
+            try:
+                audio_frame = self._robot.media.get_audio_sample()
+                if audio_frame is not None:
+                    self.log_print(f"[RECORDER] Microphone is active! Got audio on warmup attempt {warmup_count + 1}")
+                    break
+                warmup_count += 1
+            except Exception as e:
+                self.log_print(f"[RECORDER] Error during warmup: {e}")
+            await asyncio.sleep(0.01)
+        
+        if warmup_count == 100:
+            self.log_print("[RECORDER] WARNING: Microphone returned None during warmup. It may need actual audio input (speak into it) or may not be available.")
+        
+        self.log_print("[RECORDER] Starting recording loop...")
+        
         while self.is_recording:
             loop_count += 1
             try:
@@ -72,12 +100,16 @@ class SimpleRecorder:
                     sample_rate, audio_data = audio_frame
                     self.recorded_audio.append((sample_rate, audio_data))
                     frame_count += 1
-                    if frame_count % 50 == 0:  # Log every 50th frame to reduce spam
+                    if frame_count == 1:
+                        self.log_print(f"[RECORDER] First audio frame captured! ({len(audio_data)} samples @ {sample_rate}Hz)")
+                    elif frame_count % 50 == 0:  # Log every 50th frame to reduce spam
                         self.log_print(f"[RECORDER] Captured {frame_count} frames ({len(audio_data)} samples @ {sample_rate}Hz each)")
                 else:
                     none_count += 1
-                    if none_count % 100 == 0:  # Log every 100th None to reduce spam
-                        self.log_print(f"[RECORDER] get_audio_sample() returned None ({none_count} times, {loop_count} total loops)")
+                    if none_count == 1:
+                        self.log_print("[RECORDER] get_audio_sample() returned None - waiting for audio input...")
+                    elif none_count % 100 == 0:  # Log every 100th None to reduce spam
+                        self.log_print(f"[RECORDER] Still waiting for audio... ({none_count} None returns, {loop_count} total loops)")
             except Exception as e:
                 self.log_print(f"[RECORDER] Error capturing audio: {e}", "ERROR")
                 import traceback
