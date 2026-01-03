@@ -257,11 +257,23 @@ class SimpleRecorder:
             concatenated_audio = await asyncio.to_thread(
                 signal.resample, concatenated_audio, num_samples
             )
+            
+            # Normalize audio to prevent clipping (capping)
+            # Clip values to [-1.0, 1.0] range to prevent distortion
+            max_val = np.abs(concatenated_audio).max()
+            if max_val > 1.0:
+                self.log_print(f"[RECORDER] WARNING: Audio clipping detected (max={max_val:.3f}), normalizing...")
+                concatenated_audio = np.clip(concatenated_audio, -1.0, 1.0)
+            elif max_val > 0:
+                # Optional: normalize to use full dynamic range (comment out if not needed)
+                # concatenated_audio = concatenated_audio / max_val
+                pass
+            
             actual_duration = len(concatenated_audio) / output_sample_rate
             self.log_print(f"[RECORDER] Resampling complete: {len(concatenated_audio)} samples (duration: {actual_duration:.3f}s)")
             
             # Step 4: Push audio in chunks with proper timing
-            # Instead of pushing all at once, push with timing to prevent buffer overflow
+            # Push chunks and sleep to match real-time playback rate
             chunk_size = round(output_sample_rate * 0.01)  # 10ms chunks
             
             if chunk_size <= 0:
@@ -273,15 +285,22 @@ class SimpleRecorder:
             
             total_pushed = 0
             start_time = time.time()
+            last_chunk_time = start_time
             
             for i in range(0, len(concatenated_audio), chunk_size):
                 chunk = concatenated_audio[i:i+chunk_size]
                 if len(chunk) > 0:
+                    chunk_start = time.time()
                     self._robot.media.push_audio_sample(chunk)
                     total_pushed += len(chunk)
                     
-                    # Sleep for the duration of this chunk to prevent buffer overflow
-                    await asyncio.sleep(chunk_duration)
+                    # Calculate how long to sleep to maintain real-time playback
+                    # Account for time spent pushing
+                    push_time = time.time() - chunk_start
+                    sleep_time = max(0, chunk_duration - push_time)
+                    
+                    if sleep_time > 0:
+                        await asyncio.sleep(sleep_time)
                     
                     if (i // chunk_size) % 100 == 0:
                         self.log_print(f"[RECORDER] Pushed {total_pushed}/{len(concatenated_audio)} samples ({100*total_pushed/len(concatenated_audio):.1f}%)")
@@ -289,6 +308,18 @@ class SimpleRecorder:
             elapsed = time.time() - start_time
             expected_duration = len(concatenated_audio) / output_sample_rate
             self.log_print(f"[RECORDER] Finished pushing all {total_pushed} samples (elapsed: {elapsed:.3f}s, expected: {expected_duration:.3f}s)")
+            
+            # Wait for remaining audio to finish playing
+            # The audio system buffers chunks, so we need to wait for the buffer to drain
+            remaining_time = max(0, expected_duration - elapsed)
+            if remaining_time > 0:
+                self.log_print(f"[RECORDER] Waiting {remaining_time:.3f}s for audio buffer to drain...")
+                await asyncio.sleep(remaining_time)
+            
+            # Additional small buffer to ensure all audio is played
+            # Audio systems often have internal buffering
+            await asyncio.sleep(0.1)
+            self.log_print(f"[RECORDER] Audio playback complete")
                     
         except Exception as e:
             self.log_print(f"[RECORDER] Error during replay: {e}", "ERROR")
@@ -296,6 +327,7 @@ class SimpleRecorder:
             self.log_print(traceback.format_exc(), "ERROR")
         finally:
             # CRITICAL: Stop the speaker after playing
+            # Only stop after ensuring all audio has been played
             try:
                 self._robot.media.stop_playing()
                 self.log_print("[RECORDER] Speaker stopped")
