@@ -142,6 +142,14 @@ class SimpleRecorder:
             self.log_print("[RECORDER] No audio to replay")
             return
         
+        # Get output sample rate for resampling
+        try:
+            output_sample_rate = self._robot.media.get_output_audio_samplerate()
+            self.log_print(f"[RECORDER] Output audio sample rate: {output_sample_rate} Hz")
+        except Exception as e:
+            self.log_print(f"[RECORDER] Could not get output sample rate: {e}")
+            output_sample_rate = 24000  # Default fallback
+        
         # CRITICAL: Start the speaker before playing
         try:
             self._robot.media.start_playing()
@@ -153,7 +161,9 @@ class SimpleRecorder:
         self.log_print(f"[RECORDER] Replaying {len(self.recorded_audio)} audio frames...")
         
         try:
-            for i, (sample_rate, audio_data) in enumerate(self.recorded_audio):
+            from scipy import signal
+            
+            for i, (input_sample_rate, audio_data) in enumerate(self.recorded_audio):
                 try:
                     # Convert to float32 if needed
                     if audio_data.dtype != np.float32:
@@ -168,17 +178,31 @@ class SimpleRecorder:
                     if audio_float.ndim == 2:
                         audio_float = audio_float[:, 0] if audio_float.shape[1] > 0 else audio_float.flatten()
                     
+                    # CRITICAL: Resample if input sample rate != output sample rate
+                    if input_sample_rate != output_sample_rate:
+                        num_samples = int(len(audio_float) * output_sample_rate / input_sample_rate)
+                        if num_samples > 0:
+                            audio_float = signal.resample(audio_float, num_samples)
+                            self.log_print(f"[RECORDER] Resampled frame {i+1} from {input_sample_rate}Hz to {output_sample_rate}Hz ({len(audio_float)} samples)")
+                        else:
+                            self.log_print(f"[RECORDER] Skipping frame {i+1} (invalid sample count)")
+                            continue
+                    
                     # Push to robot speaker
                     self._robot.media.push_audio_sample(audio_float)
+                    
+                    # Calculate proper delay based on audio duration at output sample rate
+                    # This matches the example: time.sleep(len(samples) / output_sample_rate)
+                    audio_duration = len(audio_float) / output_sample_rate
+                    await asyncio.sleep(audio_duration)
                     
                     if i % 50 == 0:  # Log every 50th frame
                         self.log_print(f"[RECORDER] Replayed {i+1}/{len(self.recorded_audio)} frames")
                     
-                    # Small delay to match original timing
-                    await asyncio.sleep(0.01)
-                    
                 except Exception as e:
                     self.log_print(f"[RECORDER] Error replaying frame {i}: {e}", "ERROR")
+                    import traceback
+                    self.log_print(traceback.format_exc(), "ERROR")
         finally:
             # CRITICAL: Stop the speaker after playing
             try:
