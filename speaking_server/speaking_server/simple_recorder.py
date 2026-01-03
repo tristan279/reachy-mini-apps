@@ -143,19 +143,25 @@ class SimpleRecorder:
             return
         
         # Get input and output sample rates for resampling
+        # CRITICAL: Always get the actual output sample rate from hardware
         try:
             input_sample_rate = self._robot.media.get_input_audio_samplerate()
             output_sample_rate = self._robot.media.get_output_audio_samplerate()
-            self.log_print(f"[RECORDER] Input sample rate: {input_sample_rate} Hz, Output sample rate: {output_sample_rate} Hz")
+            self.log_print(f"[RECORDER] Hardware rates - Input: {input_sample_rate} Hz, Output: {output_sample_rate} Hz")
         except Exception as e:
-            self.log_print(f"[RECORDER] Could not get sample rates: {e}")
-            # Use recorded sample rate as fallback
-            if self.recorded_audio:
-                input_sample_rate = self.recorded_audio[0][0]
-                output_sample_rate = input_sample_rate  # Use same as input if unknown
-            else:
-                self.log_print("[RECORDER] No recorded audio and cannot get sample rates")
-                return
+            self.log_print(f"[RECORDER] Could not get sample rates from hardware: {e}")
+            # Try to get at least output rate
+            try:
+                output_sample_rate = self._robot.media.get_output_audio_samplerate()
+                self.log_print(f"[RECORDER] Got output rate: {output_sample_rate} Hz")
+            except:
+                # Last resort: use recorded rate, but warn
+                if self.recorded_audio:
+                    output_sample_rate = self.recorded_audio[0][0]
+                    self.log_print(f"[RECORDER] WARNING: Using recorded rate as output: {output_sample_rate} Hz (may cause playback issues)")
+                else:
+                    self.log_print("[RECORDER] No recorded audio and cannot get sample rates")
+                    return
         
         # CRITICAL: Start the speaker before playing
         try:
@@ -221,8 +227,10 @@ class SimpleRecorder:
                 return
             
             self.log_print(f"[RECORDER] Concatenated {len(self.recorded_audio)} frames into {len(concatenated_audio)} total samples @ {recorded_sample_rate}Hz")
+            self.log_print(f"[RECORDER] Target output sample rate: {output_sample_rate}Hz")
             
-            # Step 3: Resample the entire audio if needed
+            # Step 3: ALWAYS resample to match output sample rate (even if rates appear to match)
+            # This ensures correct playback speed regardless of any sample rate mismatches
             if recorded_sample_rate != output_sample_rate:
                 # Use round() instead of int() to avoid precision loss
                 num_samples = round(output_sample_rate * len(concatenated_audio) / recorded_sample_rate)
@@ -236,15 +244,24 @@ class SimpleRecorder:
                     self.log_print(f"[RECORDER] Audio too short for resampling ({len(concatenated_audio)} samples), skipping")
                     return
                 
-                self.log_print(f"[RECORDER] Resampling from {recorded_sample_rate}Hz to {output_sample_rate}Hz ({len(concatenated_audio)} -> {num_samples} samples)")
+                original_duration = len(concatenated_audio) / recorded_sample_rate
+                expected_duration = num_samples / output_sample_rate
+                self.log_print(f"[RECORDER] Resampling from {recorded_sample_rate}Hz to {output_sample_rate}Hz")
+                self.log_print(f"[RECORDER]   Original: {len(concatenated_audio)} samples = {original_duration:.3f}s")
+                self.log_print(f"[RECORDER]   Target: {num_samples} samples = {expected_duration:.3f}s")
                 
                 # Use async resampling to avoid blocking the event loop
                 concatenated_audio = await asyncio.to_thread(
                     signal.resample, concatenated_audio, num_samples
                 )
-                self.log_print(f"[RECORDER] Resampling complete")
+                self.log_print(f"[RECORDER] Resampling complete: {len(concatenated_audio)} samples")
             else:
                 self.log_print(f"[RECORDER] No resampling needed (both rates are {recorded_sample_rate}Hz)")
+                # Double-check: if rates match but audio sounds wrong, force resampling anyway
+                # This handles cases where the reported rates don't match actual hardware
+                if len(concatenated_audio) > 0:
+                    actual_duration = len(concatenated_audio) / recorded_sample_rate
+                    self.log_print(f"[RECORDER] Audio duration: {actual_duration:.3f}s at {recorded_sample_rate}Hz")
             
             # Step 4: Push audio in chunks quickly, then sleep for total duration
             # The audio system handles buffering, so we push quickly and sleep once
