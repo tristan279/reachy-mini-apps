@@ -142,13 +142,19 @@ class SimpleRecorder:
             self.log_print("[RECORDER] No audio to replay")
             return
         
-        # Get output sample rate for resampling
+        # Get input and output sample rates for resampling
         try:
+            input_sample_rate = self._robot.media.get_input_audio_samplerate()
             output_sample_rate = self._robot.media.get_output_audio_samplerate()
-            self.log_print(f"[RECORDER] Output audio sample rate: {output_sample_rate} Hz")
+            self.log_print(f"[RECORDER] Input sample rate: {input_sample_rate} Hz, Output sample rate: {output_sample_rate} Hz")
         except Exception as e:
-            self.log_print(f"[RECORDER] Could not get output sample rate: {e}")
-            output_sample_rate = 24000  # Default fallback
+            self.log_print(f"[RECORDER] Could not get sample rates: {e}")
+            # Use recorded sample rate as fallback
+            if self.recorded_audio:
+                input_sample_rate = self.recorded_audio[0][0]
+            else:
+                input_sample_rate = 16000
+            output_sample_rate = 24000
         
         # CRITICAL: Start the speaker before playing
         try:
@@ -163,46 +169,72 @@ class SimpleRecorder:
         try:
             from scipy import signal
             
-            for i, (input_sample_rate, audio_data) in enumerate(self.recorded_audio):
-                try:
-                    # Convert to float32 if needed
-                    if audio_data.dtype != np.float32:
-                        if audio_data.dtype == np.int16:
-                            audio_float = audio_data.astype(np.float32) / 32767.0
-                        else:
-                            audio_float = audio_data.astype(np.float32)
+            # Step 1: Concatenate all audio frames
+            self.log_print("[RECORDER] Concatenating audio frames...")
+            all_audio_chunks = []
+            recorded_sample_rate = self.recorded_audio[0][0] if self.recorded_audio else input_sample_rate
+            
+            for i, (sample_rate, audio_data) in enumerate(self.recorded_audio):
+                # Convert to float32 if needed
+                if audio_data.dtype != np.float32:
+                    if audio_data.dtype == np.int16:
+                        audio_float = audio_data.astype(np.float32) / 32767.0
                     else:
-                        audio_float = audio_data
+                        audio_float = audio_data.astype(np.float32)
+                else:
+                    audio_float = audio_data
+                
+                # Ensure mono (1D array)
+                if audio_float.ndim == 2:
+                    audio_float = audio_float[:, 0] if audio_float.shape[1] > 0 else audio_float.flatten()
+                
+                all_audio_chunks.append(audio_float)
+            
+            # Concatenate all chunks
+            concatenated_audio = np.concatenate(all_audio_chunks)
+            self.log_print(f"[RECORDER] Concatenated {len(self.recorded_audio)} frames into {len(concatenated_audio)} total samples @ {recorded_sample_rate}Hz")
+            
+            # Step 2: Resample the entire audio if needed
+            if recorded_sample_rate != output_sample_rate:
+                num_samples = int(output_sample_rate * len(concatenated_audio) / recorded_sample_rate)
+                self.log_print(f"[RECORDER] Resampling from {recorded_sample_rate}Hz to {output_sample_rate}Hz ({len(concatenated_audio)} -> {num_samples} samples)")
+                concatenated_audio = signal.resample(concatenated_audio, num_samples)
+                self.log_print(f"[RECORDER] Resampling complete")
+            else:
+                self.log_print(f"[RECORDER] No resampling needed (both rates are {recorded_sample_rate}Hz)")
+            
+            # Step 3: Push audio in chunks (matching the original frame timing)
+            # Calculate chunk size based on original frame size at output rate
+            if self.recorded_audio:
+                # Estimate original frame size
+                original_frame_size = len(self.recorded_audio[0][1])
+                chunk_size = int(original_frame_size * output_sample_rate / recorded_sample_rate)
+            else:
+                chunk_size = int(output_sample_rate * 0.01)  # 10ms chunks
+            
+            self.log_print(f"[RECORDER] Pushing audio in chunks of ~{chunk_size} samples...")
+            
+            total_pushed = 0
+            for i in range(0, len(concatenated_audio), chunk_size):
+                chunk = concatenated_audio[i:i+chunk_size]
+                if len(chunk) > 0:
+                    self._robot.media.push_audio_sample(chunk)
+                    total_pushed += len(chunk)
                     
-                    # Ensure mono
-                    if audio_float.ndim == 2:
-                        audio_float = audio_float[:, 0] if audio_float.shape[1] > 0 else audio_float.flatten()
+                    # Small delay to prevent overwhelming the audio system
+                    # Calculate delay based on chunk duration at output rate
+                    chunk_duration = len(chunk) / output_sample_rate
+                    await asyncio.sleep(chunk_duration)
                     
-                    # CRITICAL: Resample if input sample rate != output sample rate
-                    if input_sample_rate != output_sample_rate:
-                        num_samples = int(len(audio_float) * output_sample_rate / input_sample_rate)
-                        if num_samples > 0:
-                            audio_float = signal.resample(audio_float, num_samples)
-                            self.log_print(f"[RECORDER] Resampled frame {i+1} from {input_sample_rate}Hz to {output_sample_rate}Hz ({len(audio_float)} samples)")
-                        else:
-                            self.log_print(f"[RECORDER] Skipping frame {i+1} (invalid sample count)")
-                            continue
+                    if (i // chunk_size) % 100 == 0:
+                        self.log_print(f"[RECORDER] Pushed {total_pushed}/{len(concatenated_audio)} samples ({100*total_pushed/len(concatenated_audio):.1f}%)")
+            
+            self.log_print(f"[RECORDER] Finished pushing all {total_pushed} samples")
                     
-                    # Push to robot speaker
-                    self._robot.media.push_audio_sample(audio_float)
-                    
-                    # Calculate proper delay based on audio duration at output sample rate
-                    # This matches the example: time.sleep(len(samples) / output_sample_rate)
-                    audio_duration = len(audio_float) / output_sample_rate
-                    await asyncio.sleep(audio_duration)
-                    
-                    if i % 50 == 0:  # Log every 50th frame
-                        self.log_print(f"[RECORDER] Replayed {i+1}/{len(self.recorded_audio)} frames")
-                    
-                except Exception as e:
-                    self.log_print(f"[RECORDER] Error replaying frame {i}: {e}", "ERROR")
-                    import traceback
-                    self.log_print(traceback.format_exc(), "ERROR")
+        except Exception as e:
+            self.log_print(f"[RECORDER] Error during replay: {e}", "ERROR")
+            import traceback
+            self.log_print(traceback.format_exc(), "ERROR")
         finally:
             # CRITICAL: Stop the speaker after playing
             try:
