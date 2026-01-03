@@ -1,3 +1,5 @@
+console.log("[MAIN.JS] Script loaded");
+
 let antennasEnabled = true;
 
 async function updateAntennasState(enabled) {
@@ -47,7 +49,8 @@ document.getElementById("sound-btn").addEventListener("click", () => {
 // Recording functionality
 let isRecording = false;
 
-async function toggleRecording() {
+// Make functions globally accessible
+window.toggleRecording = async function toggleRecording() {
     console.log("[RECORDING] Button clicked, isRecording:", isRecording);
     const btn = document.getElementById("record-btn");
     const statusDiv = document.getElementById("recording-status");
@@ -155,7 +158,7 @@ setInterval(async () => {
     }
 }, 1000);
 
-async function replayRecording() {
+window.replayRecording = async function replayRecording() {
     console.log("[RECORDING] Replay button clicked");
     const replayBtn = document.getElementById("replay-btn");
     const statusDiv = document.getElementById("recording-status");

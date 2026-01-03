@@ -54,7 +54,18 @@ class SimpleRecorder:
     async def _record_loop(self):
         """Record audio frames while recording is active."""
         frame_count = 0
+        none_count = 0
+        loop_count = 0
+        
+        # Try to get input sample rate for debugging
+        try:
+            input_rate = self._robot.media.get_input_audio_samplerate()
+            self.log_print(f"[RECORDER] Input audio sample rate: {input_rate} Hz")
+        except Exception as e:
+            self.log_print(f"[RECORDER] Could not get input sample rate: {e}")
+        
         while self.is_recording:
+            loop_count += 1
             try:
                 audio_frame = self._robot.media.get_audio_sample()
                 if audio_frame is not None:
@@ -63,10 +74,19 @@ class SimpleRecorder:
                     frame_count += 1
                     if frame_count % 50 == 0:  # Log every 50th frame to reduce spam
                         self.log_print(f"[RECORDER] Captured {frame_count} frames ({len(audio_data)} samples @ {sample_rate}Hz each)")
+                else:
+                    none_count += 1
+                    if none_count % 100 == 0:  # Log every 100th None to reduce spam
+                        self.log_print(f"[RECORDER] get_audio_sample() returned None ({none_count} times, {loop_count} total loops)")
             except Exception as e:
                 self.log_print(f"[RECORDER] Error capturing audio: {e}", "ERROR")
+                import traceback
+                self.log_print(traceback.format_exc(), "ERROR")
             
-            await asyncio.sleep(0.01)  # Small delay
+            # Yield to event loop (like console.py does)
+            await asyncio.sleep(0)
+        
+        self.log_print(f"[RECORDER] Loop ended: {frame_count} frames captured, {none_count} None returns, {loop_count} total loops")
     
     async def replay_recording(self):
         """Replay the recorded audio directly."""

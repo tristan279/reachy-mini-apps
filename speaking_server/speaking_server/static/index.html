@@ -21,10 +21,10 @@
         
         <div style="margin-top: 20px; padding: 15px; background: #f0f0f0; border-radius: 8px;">
             <h3>Simple Recording (No Transcription Yet)</h3>
-            <button id="record-btn" onclick="console.log('Button clicked!'); if (typeof toggleRecording === 'function') toggleRecording(); else console.error('toggleRecording not defined');" style="padding: 12px 24px; font-size: 16px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">
+            <button id="record-btn" onclick="console.log('Button clicked!'); window.toggleRecording && window.toggleRecording();" style="padding: 12px 24px; font-size: 16px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">
                 Start Recording
             </button>
-            <button id="replay-btn" onclick="console.log('Replay clicked!'); if (typeof replayRecording === 'function') replayRecording(); else console.error('replayRecording not defined');" style="padding: 12px 24px; font-size: 16px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 10px;" disabled>
+            <button id="replay-btn" onclick="console.log('Replay clicked!'); window.replayRecording && window.replayRecording();" style="padding: 12px 24px; font-size: 16px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 10px;" disabled>
                 Replay
             </button>
             <div id="recording-status" style="margin-top: 10px; font-weight: bold;"></div>
