@@ -152,9 +152,10 @@ class SimpleRecorder:
             # Use recorded sample rate as fallback
             if self.recorded_audio:
                 input_sample_rate = self.recorded_audio[0][0]
+                output_sample_rate = input_sample_rate  # Use same as input if unknown
             else:
-                input_sample_rate = 16000
-            output_sample_rate = 24000
+                self.log_print("[RECORDER] No recorded audio and cannot get sample rates")
+                return
         
         # CRITICAL: Start the speaker before playing
         try:
@@ -169,48 +170,95 @@ class SimpleRecorder:
         try:
             from scipy import signal
             
-            # Step 1: Concatenate all audio frames
+            # Step 1: Validate all frames have same sample rate
+            sample_rates = {sr for sr, _ in self.recorded_audio}
+            if len(sample_rates) > 1:
+                self.log_print(f"[RECORDER] WARNING: Mixed sample rates detected: {sample_rates}")
+            recorded_sample_rate = sample_rates.pop() if sample_rates else input_sample_rate
+            
+            # Validate sample rates
+            if recorded_sample_rate <= 0 or output_sample_rate <= 0:
+                self.log_print(f"[RECORDER] Invalid sample rates: input={recorded_sample_rate}, output={output_sample_rate}")
+                return
+            
+            # Step 2: Concatenate all audio frames
             self.log_print("[RECORDER] Concatenating audio frames...")
             all_audio_chunks = []
-            recorded_sample_rate = self.recorded_audio[0][0] if self.recorded_audio else input_sample_rate
             
             for i, (sample_rate, audio_data) in enumerate(self.recorded_audio):
                 # Convert to float32 if needed
                 if audio_data.dtype != np.float32:
                     if audio_data.dtype == np.int16:
-                        audio_float = audio_data.astype(np.float32) / 32767.0
+                        # int16 range is [-32768, 32767], normalize to [-1.0, ~1.0]
+                        audio_float = audio_data.astype(np.float32) / 32768.0
                     else:
                         audio_float = audio_data.astype(np.float32)
                 else:
                     audio_float = audio_data
                 
-                # Ensure mono (1D array)
+                # Ensure mono (1D array) - handle both (samples, channels) and (channels, samples)
                 if audio_float.ndim == 2:
-                    audio_float = audio_float[:, 0] if audio_float.shape[1] > 0 else audio_float.flatten()
+                    # Handle both (samples, channels) and (channels, samples)
+                    if audio_float.shape[0] < audio_float.shape[1]:
+                        audio_float = audio_float.T
+                    # Average channels if multiple, otherwise take first
+                    if audio_float.shape[1] > 1:
+                        audio_float = np.mean(audio_float, axis=1)
+                    else:
+                        audio_float = audio_float[:, 0]
                 
                 all_audio_chunks.append(audio_float)
             
             # Concatenate all chunks
+            if not all_audio_chunks:
+                self.log_print("[RECORDER] No audio data to replay")
+                return
+            
             concatenated_audio = np.concatenate(all_audio_chunks)
+            
+            if len(concatenated_audio) == 0:
+                self.log_print("[RECORDER] Concatenated audio is empty")
+                return
+            
             self.log_print(f"[RECORDER] Concatenated {len(self.recorded_audio)} frames into {len(concatenated_audio)} total samples @ {recorded_sample_rate}Hz")
             
-            # Step 2: Resample the entire audio if needed
+            # Step 3: Resample the entire audio if needed
             if recorded_sample_rate != output_sample_rate:
-                num_samples = int(output_sample_rate * len(concatenated_audio) / recorded_sample_rate)
+                # Use round() instead of int() to avoid precision loss
+                num_samples = round(output_sample_rate * len(concatenated_audio) / recorded_sample_rate)
+                
+                if num_samples <= 0:
+                    self.log_print("[RECORDER] Invalid resampling target size")
+                    return
+                
+                # Validate minimum array size for resampling
+                if len(concatenated_audio) < 10:
+                    self.log_print(f"[RECORDER] Audio too short for resampling ({len(concatenated_audio)} samples), skipping")
+                    return
+                
                 self.log_print(f"[RECORDER] Resampling from {recorded_sample_rate}Hz to {output_sample_rate}Hz ({len(concatenated_audio)} -> {num_samples} samples)")
-                concatenated_audio = signal.resample(concatenated_audio, num_samples)
+                
+                # Use async resampling to avoid blocking the event loop
+                concatenated_audio = await asyncio.to_thread(
+                    signal.resample, concatenated_audio, num_samples
+                )
                 self.log_print(f"[RECORDER] Resampling complete")
             else:
                 self.log_print(f"[RECORDER] No resampling needed (both rates are {recorded_sample_rate}Hz)")
             
-            # Step 3: Push audio in chunks (matching the original frame timing)
+            # Step 4: Push audio in chunks (matching the original frame timing)
             # Calculate chunk size based on original frame size at output rate
             if self.recorded_audio:
                 # Estimate original frame size
                 original_frame_size = len(self.recorded_audio[0][1])
-                chunk_size = int(original_frame_size * output_sample_rate / recorded_sample_rate)
+                # Use round() instead of int() to avoid precision loss
+                chunk_size = round(original_frame_size * output_sample_rate / recorded_sample_rate)
             else:
-                chunk_size = int(output_sample_rate * 0.01)  # 10ms chunks
+                chunk_size = round(output_sample_rate * 0.01)  # 10ms chunks
+            
+            if chunk_size <= 0:
+                self.log_print("[RECORDER] Invalid chunk size, using default")
+                chunk_size = round(output_sample_rate * 0.01)  # 10ms chunks
             
             self.log_print(f"[RECORDER] Pushing audio in chunks of ~{chunk_size} samples...")
             
