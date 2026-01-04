@@ -9,6 +9,7 @@ from typing import Optional, List, Tuple
 import logging
 from scipy import signal
 import boto3
+from botocore.exceptions import ClientError
 
 # Try to import amazon-transcribe for better async support
 try:
@@ -55,9 +56,17 @@ class SimpleRecorder:
         self.language_code = os.getenv("TRANSCRIBE_LANGUAGE", "en-US")
         self.transcribe_sample_rate = 16000  # AWS Transcribe requirement
         
-        # Initialize AWS Transcribe if enabled
+        # Polly configuration
+        self.polly_voice_id = os.getenv("POLLY_VOICE", "Joanna")
+        self.polly_engine = os.getenv("POLLY_ENGINE", "standard")
+        self.polly_sample_rate = 24000  # Default output sample rate for Polly
+        
+        # AWS clients
+        self.polly_client = None
+        
+        # Initialize AWS clients if enabled
         if self.transcription_enabled:
-            self._init_transcribe()
+            self._init_aws_clients()
         
     async def start_recording(self):
         """Start recording audio."""
@@ -124,8 +133,15 @@ class SimpleRecorder:
         if self.final_transcripts:
             full_text = " ".join(self.final_transcripts)
             self.log_print(f"[TRANSCRIPTION] Final transcript: {full_text}")
+            
+            # Speak the transcription using Polly
+            if full_text.strip():
+                asyncio.create_task(self._speak_transcription(full_text))
         elif self.partial_transcript:
             self.log_print(f"[TRANSCRIPTION] Partial transcript: {self.partial_transcript}")
+            # Use partial if no final transcripts
+            if self.partial_transcript.strip():
+                asyncio.create_task(self._speak_transcription(self.partial_transcript))
     
     async def _record_loop(self):
         """Record audio frames while recording is active."""
@@ -433,16 +449,21 @@ class SimpleRecorder:
         
         return result
     
-    def _init_transcribe(self):
-        """Initialize AWS Transcribe client."""
+    def _init_aws_clients(self):
+        """Initialize AWS Transcribe and Polly clients."""
         try:
             if self.aws_profile:
                 session = boto3.Session(profile_name=self.aws_profile)
-                self.log_print(f"[TRANSCRIBE] Using AWS profile: {self.aws_profile}")
+                self.log_print(f"[AWS] Using AWS profile: {self.aws_profile}")
             else:
                 session = boto3.Session()
-                self.log_print("[TRANSCRIBE] Using default AWS credentials")
+                self.log_print("[AWS] Using default AWS credentials")
             
+            # Initialize Polly client
+            self.polly_client = session.client('polly', region_name=self.aws_region)
+            self.log_print("[AWS] Initialized Polly client")
+            
+            # Initialize Transcribe client
             if HAS_AMAZON_TRANSCRIBE:
                 if self.aws_profile:
                     original_profile = os.environ.get('AWS_PROFILE')
@@ -457,17 +478,18 @@ class SimpleRecorder:
                         raise
                 else:
                     self.transcribe_client = TranscribeStreamingClient(region=self.aws_region)
-                self.log_print("[TRANSCRIBE] Initialized with amazon-transcribe library")
+                self.log_print("[AWS] Initialized Transcribe with amazon-transcribe library")
             else:
                 self.transcribe_client = session.client(
                     'transcribe-streaming',
                     region_name=self.aws_region
                 )
-                self.log_print("[TRANSCRIBE] Initialized with boto3 (consider installing amazon-transcribe)")
+                self.log_print("[AWS] Initialized Transcribe with boto3 (consider installing amazon-transcribe)")
         except Exception as e:
-            self.log_print(f"[TRANSCRIBE] Error initializing: {e}", "ERROR")
+            self.log_print(f"[AWS] Error initializing: {e}", "ERROR")
             self.transcription_enabled = False
             self.transcribe_client = None
+            self.polly_client = None
     
     async def _start_transcription(self):
         """Start AWS Transcribe streaming session."""
@@ -596,6 +618,97 @@ class SimpleRecorder:
             "full_text": " ".join(self.final_transcripts) if self.final_transcripts else "",
             "all_segments": self.all_transcripts[-20:]  # Last 20 segments
         }
+    
+    async def _speak_transcription(self, text: str):
+        """Speak the transcription using AWS Polly with 'You said: ' prefix."""
+        if not text.strip() or not self.polly_client:
+            return
+        
+        # Add prefix
+        full_text = f"You said: {text}"
+        self.log_print(f"[TTS] Speaking: {full_text}")
+        
+        try:
+            # Get output sample rate from robot
+            try:
+                output_sample_rate = self._robot.media.get_output_audio_samplerate()
+            except:
+                output_sample_rate = self.polly_sample_rate
+                self.log_print(f"[TTS] Could not get output sample rate, using {output_sample_rate}Hz")
+            
+            # Generate TTS using AWS Polly
+            response = self.polly_client.synthesize_speech(
+                Text=full_text,
+                OutputFormat='pcm',  # PCM format for direct playback
+                VoiceId=self.polly_voice_id,
+                Engine=self.polly_engine,
+                SampleRate=str(output_sample_rate),
+            )
+            
+            # Read audio stream
+            audio_stream = response['AudioStream'].read()
+            
+            # Convert bytes to numpy array
+            # PCM format: int16, mono, at specified sample rate
+            audio_data = np.frombuffer(audio_stream, dtype=np.int16)
+            
+            # Convert to float32 for robot (range [-1, 1])
+            audio_float = audio_data.astype(np.float32) / 32767.0
+            
+            # Start the speaker
+            try:
+                self._robot.media.start_playing()
+                self.log_print("[TTS] Speaker started")
+            except Exception as e:
+                self.log_print(f"[TTS] Error starting speaker: {e}", "ERROR")
+                return
+            
+            # Push audio in chunks with proper timing
+            chunk_size = round(output_sample_rate * 0.01)  # 10ms chunks
+            chunk_duration = chunk_size / output_sample_rate
+            
+            total_pushed = 0
+            start_time = time.time()
+            
+            for i in range(0, len(audio_float), chunk_size):
+                chunk = audio_float[i:i+chunk_size]
+                if len(chunk) > 0:
+                    chunk_start = time.time()
+                    self._robot.media.push_audio_sample(chunk)
+                    total_pushed += len(chunk)
+                    
+                    # Calculate sleep time to maintain real-time playback
+                    push_time = time.time() - chunk_start
+                    sleep_time = max(0, chunk_duration - push_time)
+                    
+                    if sleep_time > 0:
+                        await asyncio.sleep(sleep_time)
+            
+            # Wait for audio to finish playing
+            elapsed = time.time() - start_time
+            expected_duration = len(audio_float) / output_sample_rate
+            remaining_time = max(0, expected_duration - elapsed)
+            if remaining_time > 0:
+                await asyncio.sleep(remaining_time)
+            
+            # Additional buffer
+            await asyncio.sleep(0.1)
+            
+            # Stop the speaker
+            try:
+                self._robot.media.stop_playing()
+                self.log_print("[TTS] Speaker stopped")
+            except Exception as e:
+                self.log_print(f"[TTS] Error stopping speaker: {e}", "ERROR")
+            
+            self.log_print(f"[TTS] Finished speaking: {full_text}")
+            
+        except ClientError as e:
+            self.log_print(f"[TTS] AWS Polly error: {e}", "ERROR")
+        except Exception as e:
+            self.log_print(f"[TTS] Error generating/playing speech: {e}", "ERROR")
+            import traceback
+            self.log_print(traceback.format_exc(), "ERROR")
 
 
 if HAS_AMAZON_TRANSCRIBE:
