@@ -135,6 +135,11 @@ window.toggleRecording = async function toggleRecording() {
                 infoDiv.innerHTML = "<em>No audio recorded</em>";
                 replayBtn.disabled = true;
             }
+            
+            // Update transcription display with final results
+            if (data.transcription && data.transcription.enabled) {
+                updateTranscriptionDisplay(data.transcription);
+            }
         } catch (e) {
             console.error("[RECORDING] Error:", e);
             statusDiv.textContent = "Error: " + e.message;
@@ -157,6 +162,51 @@ setInterval(async () => {
         }
     }
 }, 1000);
+
+// Poll for transcription updates while recording
+setInterval(async () => {
+    if (isRecording) {
+        try {
+            const resp = await fetch("/recording/transcription");
+            const data = await resp.json();
+            updateTranscriptionDisplay(data);
+        } catch (e) {
+            // Ignore errors
+        }
+    }
+}, 500); // Poll more frequently for transcription (every 500ms)
+
+function updateTranscriptionDisplay(data) {
+    const partialDiv = document.getElementById("transcription-partial");
+    const finalDiv = document.getElementById("transcription-final");
+    
+    if (!partialDiv || !finalDiv) {
+        return;
+    }
+    
+    // Update partial transcript
+    if (data.partial && data.partial.trim()) {
+        partialDiv.textContent = data.partial;
+        partialDiv.style.color = "#2196F3";
+        partialDiv.style.fontStyle = "normal";
+    } else {
+        partialDiv.innerHTML = "<em>Listening...</em>";
+        partialDiv.style.color = "#666";
+        partialDiv.style.fontStyle = "italic";
+    }
+    
+    // Update final transcripts
+    if (data.full_text && data.full_text.trim()) {
+        finalDiv.textContent = data.full_text;
+        finalDiv.style.color = "#2e7d32";
+    } else if (data.final_segments && data.final_segments.length > 0) {
+        finalDiv.textContent = data.final_segments.join(" ");
+        finalDiv.style.color = "#2e7d32";
+    } else {
+        finalDiv.innerHTML = "<em>No final transcripts yet</em>";
+        finalDiv.style.color = "#666";
+    }
+}
 
 window.replayRecording = async function replayRecording() {
     console.log("[RECORDING] Replay button clicked");

@@ -20,7 +20,7 @@
         <button id="sound-btn">Play Sound</button>
         
         <div style="margin-top: 20px; padding: 15px; background: #f0f0f0; border-radius: 8px;">
-            <h3>Simple Recording (No Transcription Yet)</h3>
+            <h3>Recording with Transcription</h3>
             <button id="record-btn" onclick="console.log('Button clicked!'); window.toggleRecording && window.toggleRecording();" style="padding: 12px 24px; font-size: 16px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">
                 Start Recording
             </button>
@@ -30,6 +30,15 @@
             <div id="recording-status" style="margin-top: 10px; font-weight: bold;"></div>
             <div id="recording-info" style="margin-top: 10px; padding: 10px; background: white; border-radius: 4px; min-height: 50px; font-family: monospace; font-size: 12px;">
                 <em>No recording yet</em>
+            </div>
+            <div id="transcription-container" style="margin-top: 15px; padding: 15px; background: white; border-radius: 4px; border: 1px solid #ddd;">
+                <h4 style="margin-top: 0; margin-bottom: 10px;">Transcription</h4>
+                <div id="transcription-partial" style="padding: 8px; background: #f9f9f9; border-radius: 4px; margin-bottom: 10px; min-height: 20px; color: #666; font-style: italic;">
+                    <em>Waiting for speech...</em>
+                </div>
+                <div id="transcription-final" style="padding: 8px; background: #e8f5e9; border-radius: 4px; min-height: 20px; max-height: 200px; overflow-y: auto;">
+                    <em>No final transcripts yet</em>
+                </div>
             </div>
         </div>
     </div>

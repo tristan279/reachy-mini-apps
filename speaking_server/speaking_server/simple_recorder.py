@@ -1,16 +1,30 @@
-"""Simple audio recorder for testing - records audio and replays it."""
+"""Simple audio recorder for testing - records audio and replays it.
+Also supports real-time transcription using AWS Transcribe."""
 
 import asyncio
 import time
+import os
 import numpy as np
 from typing import Optional, List, Tuple
 import logging
+from scipy import signal
+import boto3
+
+# Try to import amazon-transcribe for better async support
+try:
+    from amazon_transcribe.client import TranscribeStreamingClient
+    from amazon_transcribe.handlers import TranscriptResultStreamHandler
+    from amazon_transcribe.model import TranscriptEvent
+    HAS_AMAZON_TRANSCRIBE = True
+except ImportError:
+    HAS_AMAZON_TRANSCRIBE = False
 
 logger = logging.getLogger(__name__)
 
 
 class SimpleRecorder:
-    """Simple recorder that captures audio and replays it directly."""
+    """Simple recorder that captures audio and replays it directly.
+    Also supports real-time transcription using AWS Transcribe."""
     
     def __init__(self, robot, log_print_func=None):
         self._robot = robot
@@ -19,6 +33,31 @@ class SimpleRecorder:
         self.is_recording = False
         self.recorded_audio: List[Tuple[int, np.ndarray]] = []  # List of (sample_rate, audio_data)
         self.recording_start_time = None
+        
+        # Transcription state
+        self.transcription_enabled = os.getenv("ENABLE_TRANSCRIPTION", "true").lower() == "true"
+        self.transcribe_client = None
+        self.transcribe_stream = None
+        self.input_stream = None
+        self.output_stream = None
+        self.is_transcribing = False
+        self.transcribe_task = None
+        self.transcription_handler = None
+        
+        # Transcription results
+        self.partial_transcript = ""
+        self.final_transcripts: List[str] = []  # List of final transcript segments
+        self.all_transcripts: List[dict] = []  # List of {type: "partial"/"final", text: str, timestamp: float}
+        
+        # AWS configuration
+        self.aws_region = os.getenv("AWS_REGION", "us-east-1")
+        self.aws_profile = os.getenv("AWS_PROFILE", "reachy-mini")
+        self.language_code = os.getenv("TRANSCRIBE_LANGUAGE", "en-US")
+        self.transcribe_sample_rate = 16000  # AWS Transcribe requirement
+        
+        # Initialize AWS Transcribe if enabled
+        if self.transcription_enabled:
+            self._init_transcribe()
         
     async def start_recording(self):
         """Start recording audio."""
@@ -37,7 +76,17 @@ class SimpleRecorder:
         self.is_recording = True
         self.recorded_audio = []
         self.recording_start_time = time.time()
+        
+        # Reset transcription
+        self.partial_transcript = ""
+        self.final_transcripts = []
+        self.all_transcripts = []
+        
         self.log_print("[RECORDER] Started recording")
+        
+        # Start transcription if enabled
+        if self.transcription_enabled and self.transcribe_client:
+            await self._start_transcription()
         
         # Start recording loop
         asyncio.create_task(self._record_loop())
@@ -49,6 +98,10 @@ class SimpleRecorder:
             return
         
         self.is_recording = False
+        
+        # Stop transcription
+        if self.is_transcribing:
+            await self._stop_transcription()
         
         # CRITICAL: Stop the microphone
         try:
@@ -66,6 +119,13 @@ class SimpleRecorder:
             sample_rate = self.recorded_audio[0][0] if self.recorded_audio else 0
             duration_seconds = total_samples / sample_rate if sample_rate > 0 else 0
             self.log_print(f"[RECORDER] Total audio: {total_samples} samples @ {sample_rate}Hz = {duration_seconds:.2f} seconds")
+        
+        # Log transcription summary
+        if self.final_transcripts:
+            full_text = " ".join(self.final_transcripts)
+            self.log_print(f"[TRANSCRIPTION] Final transcript: {full_text}")
+        elif self.partial_transcript:
+            self.log_print(f"[TRANSCRIPTION] Partial transcript: {self.partial_transcript}")
     
     async def _record_loop(self):
         """Record audio frames while recording is active."""
@@ -113,6 +173,10 @@ class SimpleRecorder:
                         self.log_print(f"[RECORDER] First audio frame captured! ({len(audio_data)} samples @ {sample_rate}Hz)")
                     elif frame_count % 50 == 0:  # Log every 50th frame to reduce spam
                         self.log_print(f"[RECORDER] Captured {frame_count} frames ({len(audio_data)} samples @ {sample_rate}Hz each)")
+                    
+                    # Send to transcription if enabled
+                    if self.is_transcribing and self.input_stream:
+                        await self._send_audio_to_transcribe(sample_rate, audio_data)
                 else:
                     none_count += 1
                     if none_count == 1:
@@ -346,7 +410,7 @@ class SimpleRecorder:
         sample_rate = self.recorded_audio[0][0] if self.recorded_audio else 0
         audio_duration = total_samples / sample_rate if sample_rate > 0 else 0
         
-        return {
+        result = {
             "is_recording": self.is_recording,
             "frames_recorded": len(self.recorded_audio),
             "recording_duration": round(duration, 2),
@@ -354,3 +418,213 @@ class SimpleRecorder:
             "total_samples": total_samples,
             "sample_rate": sample_rate
         }
+        
+        # Add transcription info
+        if self.transcription_enabled:
+            result["transcription"] = {
+                "enabled": True,
+                "partial": self.partial_transcript,
+                "final_segments": self.final_transcripts,
+                "full_text": " ".join(self.final_transcripts) if self.final_transcripts else "",
+                "all_segments": self.all_transcripts[-10:]  # Last 10 segments for display
+            }
+        else:
+            result["transcription"] = {"enabled": False}
+        
+        return result
+    
+    def _init_transcribe(self):
+        """Initialize AWS Transcribe client."""
+        try:
+            if self.aws_profile:
+                session = boto3.Session(profile_name=self.aws_profile)
+                self.log_print(f"[TRANSCRIBE] Using AWS profile: {self.aws_profile}")
+            else:
+                session = boto3.Session()
+                self.log_print("[TRANSCRIBE] Using default AWS credentials")
+            
+            if HAS_AMAZON_TRANSCRIBE:
+                if self.aws_profile:
+                    original_profile = os.environ.get('AWS_PROFILE')
+                    os.environ['AWS_PROFILE'] = self.aws_profile
+                    try:
+                        self.transcribe_client = TranscribeStreamingClient(region=self.aws_region)
+                    except Exception as e:
+                        if original_profile:
+                            os.environ['AWS_PROFILE'] = original_profile
+                        elif 'AWS_PROFILE' in os.environ:
+                            del os.environ['AWS_PROFILE']
+                        raise
+                else:
+                    self.transcribe_client = TranscribeStreamingClient(region=self.aws_region)
+                self.log_print("[TRANSCRIBE] Initialized with amazon-transcribe library")
+            else:
+                self.transcribe_client = session.client(
+                    'transcribe-streaming',
+                    region_name=self.aws_region
+                )
+                self.log_print("[TRANSCRIBE] Initialized with boto3 (consider installing amazon-transcribe)")
+        except Exception as e:
+            self.log_print(f"[TRANSCRIBE] Error initializing: {e}", "ERROR")
+            self.transcription_enabled = False
+            self.transcribe_client = None
+    
+    async def _start_transcription(self):
+        """Start AWS Transcribe streaming session."""
+        if not self.transcribe_client or self.is_transcribing:
+            return
+        
+        try:
+            if HAS_AMAZON_TRANSCRIBE:
+                stream = await self.transcribe_client.start_stream_transcription(
+                    language_code=self.language_code,
+                    media_sample_rate_hz=self.transcribe_sample_rate,
+                    media_encoding="pcm",
+                )
+                
+                self.input_stream = stream.input_stream
+                self.output_stream = stream.output_stream
+                self.transcribe_stream = stream
+                self.is_transcribing = True
+                self.log_print("[TRANSCRIBE] Started streaming transcription")
+                
+                # Create event handler
+                self.transcription_handler = TranscriptEventHandler(
+                    transcript_result_stream=self.output_stream,
+                    recorder=self,
+                    log_print_func=self.log_print
+                )
+                
+                # Start processing events
+                self.transcribe_task = asyncio.create_task(
+                    self.transcription_handler.handle_events()
+                )
+            else:
+                self.log_print("[TRANSCRIBE] amazon-transcribe not available, transcription disabled", "WARNING")
+                self.transcription_enabled = False
+        except Exception as e:
+            self.log_print(f"[TRANSCRIBE] Error starting transcription: {e}", "ERROR")
+            self.is_transcribing = False
+    
+    async def _stop_transcription(self):
+        """Stop AWS Transcribe streaming session."""
+        if not self.is_transcribing:
+            return
+        
+        self.is_transcribing = False
+        
+        try:
+            if self.input_stream:
+                await self.input_stream.end_stream()
+        except Exception as e:
+            self.log_print(f"[TRANSCRIBE] Error ending stream: {e}")
+        
+        if self.transcribe_task and not self.transcribe_task.done():
+            self.transcribe_task.cancel()
+            try:
+                await self.transcribe_task
+            except asyncio.CancelledError:
+                pass
+        
+        self.log_print("[TRANSCRIBE] Stopped transcription")
+    
+    async def _send_audio_to_transcribe(self, sample_rate: int, audio_data: np.ndarray):
+        """Send audio frame to AWS Transcribe."""
+        if not self.is_transcribing or not self.input_stream:
+            return
+        
+        try:
+            # Convert to mono if needed
+            if audio_data.ndim == 2:
+                if audio_data.shape[1] > 0:
+                    audio_data = audio_data[:, 0]
+                else:
+                    audio_data = audio_data.flatten()
+            
+            # Resample to 16kHz (AWS Transcribe requirement)
+            if sample_rate != self.transcribe_sample_rate:
+                num_samples = int(len(audio_data) * self.transcribe_sample_rate / sample_rate)
+                if num_samples > 0:
+                    audio_data = signal.resample(audio_data, num_samples)
+                else:
+                    return
+            
+            # Convert to int16
+            if audio_data.dtype != np.int16:
+                if audio_data.dtype in [np.float32, np.float64]:
+                    audio_data = np.clip(audio_data, -1.0, 1.0)
+                    audio_int16 = (audio_data * 32767).astype(np.int16)
+                else:
+                    audio_int16 = audio_data.astype(np.int16)
+            else:
+                audio_int16 = audio_data
+            
+            # Convert to bytes and send
+            audio_bytes = audio_int16.tobytes()
+            await self.input_stream.send_audio_event(audio_chunk=audio_bytes)
+        except Exception as e:
+            # Don't spam errors if transcription fails
+            pass
+    
+    def _add_transcript(self, text: str, is_partial: bool):
+        """Add transcript result (partial or final)."""
+        timestamp = time.time()
+        
+        if is_partial:
+            self.partial_transcript = text
+        else:
+            if text.strip():
+                self.final_transcripts.append(text)
+                self.partial_transcript = ""
+        
+        # Store in all_transcripts for history
+        self.all_transcripts.append({
+            "type": "partial" if is_partial else "final",
+            "text": text,
+            "timestamp": timestamp
+        })
+        
+        # Limit history size
+        if len(self.all_transcripts) > 100:
+            self.all_transcripts = self.all_transcripts[-100:]
+    
+    def get_transcription(self):
+        """Get current transcription results."""
+        return {
+            "partial": self.partial_transcript,
+            "final_segments": self.final_transcripts,
+            "full_text": " ".join(self.final_transcripts) if self.final_transcripts else "",
+            "all_segments": self.all_transcripts[-20:]  # Last 20 segments
+        }
+
+
+if HAS_AMAZON_TRANSCRIBE:
+    class TranscriptEventHandler(TranscriptResultStreamHandler):
+        """Event handler for AWS Transcribe streaming results."""
+        
+        def __init__(self, transcript_result_stream, recorder, log_print_func):
+            super().__init__(transcript_result_stream)
+            self.recorder = recorder
+            self.log_print = log_print_func
+        
+        async def handle_transcript_event(self, transcript_event: TranscriptEvent):
+            """Handle transcript events from AWS Transcribe."""
+            results = transcript_event.transcript.results
+            for result in results:
+                if result.alternatives:
+                    transcript_text = result.alternatives[0].transcript
+                    if result.is_partial:
+                        self.recorder._add_transcript(transcript_text, is_partial=True)
+                        self.log_print(f"[TRANSCRIBE - PARTIAL] {transcript_text}")
+                    else:
+                        self.recorder._add_transcript(transcript_text, is_partial=False)
+                        self.log_print(f"[TRANSCRIBE - FINAL] {transcript_text}")
+else:
+    # Dummy class if amazon-transcribe is not available
+    class TranscriptEventHandler:
+        def __init__(self, transcript_result_stream, recorder, log_print_func):
+            self.recorder = recorder
+            self.log_print = log_print_func
+        
+        async def handle_events(self):
+            pass

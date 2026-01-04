@@ -357,6 +357,13 @@ class SpeakingServer(ReachyMiniApp):
                 return {"status": "not_initialized"}
             return simple_recorder.get_status()
         
+        @self.settings_app.get("/recording/transcription")
+        def get_transcription():
+            """Get current transcription results."""
+            if simple_recorder is None:
+                return {"error": "Recording not initialized"}
+            return simple_recorder.get_transcription()
+        
         log_print("Endpoints mounted successfully")
         log_print(f"API available at: {self.custom_app_url}")
         log_print(f"API documentation: {self.custom_app_url}/docs")
