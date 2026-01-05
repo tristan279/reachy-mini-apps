@@ -10,6 +10,7 @@ import logging
 from scipy import signal
 import boto3
 from botocore.exceptions import ClientError
+import aiohttp
 
 # Try to import amazon-transcribe for better async support
 try:
@@ -134,14 +135,14 @@ class SimpleRecorder:
             full_text = " ".join(self.final_transcripts)
             self.log_print(f"[TRANSCRIPTION] Final transcript: {full_text}")
             
-            # Speak the transcription using Polly
+            # Send to API and speak response
             if full_text.strip():
-                asyncio.create_task(self._speak_transcription(full_text))
+                asyncio.create_task(self._send_to_api_and_speak(full_text))
         elif self.partial_transcript:
             self.log_print(f"[TRANSCRIPTION] Partial transcript: {self.partial_transcript}")
             # Use partial if no final transcripts
             if self.partial_transcript.strip():
-                asyncio.create_task(self._speak_transcription(self.partial_transcript))
+                asyncio.create_task(self._send_to_api_and_speak(self.partial_transcript))
     
     async def _record_loop(self):
         """Record audio frames while recording is active."""
@@ -619,14 +620,56 @@ class SimpleRecorder:
             "all_segments": self.all_transcripts[-20:]  # Last 20 segments
         }
     
-    async def _speak_transcription(self, text: str):
-        """Speak the transcription using AWS Polly with 'You said: ' prefix."""
+    async def _send_to_api_and_speak(self, text: str):
+        """Send transcription to API endpoint and speak the response."""
+        if not text.strip():
+            return
+        
+        api_url = "https://reachy.tristy.dev/api/reachy/input"
+        response_text = None
+        
+        # Try to send to API
+        try:
+            self.log_print(f"[API] Sending to {api_url}: {text}")
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    api_url,
+                    json={"text": text},
+                    headers={"Content-Type": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        response_text = data.get("response", "")
+                        if response_text:
+                            self.log_print(f"[API] Received response: {response_text}")
+                        else:
+                            self.log_print("[API] Response missing 'response' key or empty")
+                            response_text = None
+                    else:
+                        self.log_print(f"[API] Error: HTTP {response.status}", "ERROR")
+                        response_text = None
+        except asyncio.TimeoutError:
+            self.log_print(f"[API] Request timed out", "ERROR")
+            response_text = None
+        except Exception as e:
+            self.log_print(f"[API] Error sending request: {e}", "ERROR")
+            response_text = None
+        
+        # Speak the response or error message
+        if response_text:
+            await self._speak_text(response_text)
+        else:
+            # Speak error message
+            error_text = f"Failed to send {text}"
+            await self._speak_text(error_text)
+    
+    async def _speak_text(self, text: str):
+        """Speak text using AWS Polly."""
         if not text.strip() or not self.polly_client:
             return
         
-        # Add prefix
-        full_text = f"You said: {text}"
-        self.log_print(f"[TTS] Speaking: {full_text}")
+        self.log_print(f"[TTS] Speaking: {text}")
         
         try:
             # Get output sample rate from robot
@@ -638,7 +681,7 @@ class SimpleRecorder:
             
             # Generate TTS using AWS Polly
             response = self.polly_client.synthesize_speech(
-                Text=full_text,
+                Text=text,
                 OutputFormat='pcm',  # PCM format for direct playback
                 VoiceId=self.polly_voice_id,
                 Engine=self.polly_engine,
@@ -701,7 +744,7 @@ class SimpleRecorder:
             except Exception as e:
                 self.log_print(f"[TTS] Error stopping speaker: {e}", "ERROR")
             
-            self.log_print(f"[TTS] Finished speaking: {full_text}")
+            self.log_print(f"[TTS] Finished speaking: {text}")
             
         except ClientError as e:
             self.log_print(f"[TTS] AWS Polly error: {e}", "ERROR")
