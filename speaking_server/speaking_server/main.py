@@ -68,6 +68,10 @@ class SpeakResponse(BaseModel):
     text: str
 
 
+class ConversationModeRequest(BaseModel):
+    enabled: bool = False
+
+
 class SpeakingServer(ReachyMiniApp):
     """Speaking Server app for Reachy Mini - HTTP server for text-to-speech using AWS Polly.
     
@@ -284,6 +288,7 @@ class SpeakingServer(ReachyMiniApp):
         
         # Simple recording endpoints (no AWS transcription yet)
         simple_recorder = None
+        conversation_mode_enabled = False  # Track conversation mode state
         
         def init_simple_recording():
             """Initialize simple recording components."""
@@ -297,6 +302,10 @@ class SpeakingServer(ReachyMiniApp):
                 )
                 
                 log_print("[SIMPLE RECORDER] Initialized (no transcription)")
+            
+            # Update conversation mode if recorder exists
+            if simple_recorder:
+                simple_recorder.set_conversation_mode(conversation_mode_enabled)
             
             return simple_recorder
         
@@ -373,12 +382,18 @@ class SpeakingServer(ReachyMiniApp):
             return simple_recorder.get_transcription()
         
         @app.post("/api/conversation")
-        def conversation():
-            """Conversation endpoint that returns text and spoken flag."""
-            return {
-                "text": "I'm an AI server API. Here's how the server is set up:\n\nMake the robot have a conversation by sending text to this endpoint.\n\nI can have conversations, but there are some things I can't do yet:\n- Full voice interaction\n- Complex multi-turn conversations\n- Integration with these APIs\n\nThis endpoint will help guide you through the conversation features.",
-                "spoken": False
-            }
+        def set_conversation_mode(request: ConversationModeRequest):
+            """Set conversation mode on/off."""
+            nonlocal conversation_mode_enabled
+            
+            conversation_mode_enabled = request.enabled
+            
+            # Update recorder if it exists
+            if simple_recorder:
+                simple_recorder.set_conversation_mode(conversation_mode_enabled)
+            
+            log_print(f"[CONVERSATION] Mode set to: {conversation_mode_enabled}")
+            return {"status": "ok", "conversation_mode": conversation_mode_enabled}
         
         # Run uvicorn server in a separate thread
         server_instance = None

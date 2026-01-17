@@ -43,28 +43,18 @@ document.getElementById("antenna-checkbox").addEventListener("change", (e) => {
 });
 
 document.getElementById("conversation-checkbox").addEventListener("change", async (e) => {
-    if (e.target.checked) {
-        try {
-            const resp = await fetch("/api/conversation", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-            });
-            const data = await resp.json();
-            console.log("[CONVERSATION] Response:", data);
-            
-            // Display the response text if needed
-            if (data.text) {
-                console.log("[CONVERSATION] Text:", data.text);
-            }
-            
-            // Handle spoken flag if needed
-            if (data.spoken !== undefined) {
-                console.log("[CONVERSATION] Spoken:", data.spoken);
-            }
-        } catch (e) {
-            console.error("[CONVERSATION] Error:", e);
-            document.getElementById("status").textContent = "Conversation error: " + e.message;
-        }
+    const enabled = e.target.checked;
+    try {
+        const resp = await fetch("/api/conversation", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled }),
+        });
+        const data = await resp.json();
+        console.log("[CONVERSATION] Mode set:", data);
+    } catch (e) {
+        console.error("[CONVERSATION] Error:", e);
+        document.getElementById("status").textContent = "Conversation error: " + e.message;
     }
 });
 

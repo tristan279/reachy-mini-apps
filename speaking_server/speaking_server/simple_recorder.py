@@ -36,6 +36,10 @@ class SimpleRecorder:
         self.recorded_audio: List[Tuple[int, np.ndarray]] = []  # List of (sample_rate, audio_data)
         self.recording_start_time = None
         
+        # Conversation mode
+        self.conversation_mode = False
+        self.conversation_api_url = "https://reachy.tristy.dev/api/conversation"
+        
         # Transcription state
         self.transcription_enabled = os.getenv("ENABLE_TRANSCRIPTION", "true").lower() == "true"
         self.transcribe_client = None
@@ -68,6 +72,11 @@ class SimpleRecorder:
         # Initialize AWS clients if enabled
         if self.transcription_enabled:
             self._init_aws_clients()
+    
+    def set_conversation_mode(self, enabled: bool):
+        """Set conversation mode on/off."""
+        self.conversation_mode = enabled
+        self.log_print(f"[RECORDER] Conversation mode: {enabled}")
         
     async def start_recording(self):
         """Start recording audio."""
@@ -650,8 +659,14 @@ class SimpleRecorder:
         if not text.strip():
             return
         
-        api_url = "https://reachy.tristy.dev/api/reachy/input"
+        # Choose API endpoint based on conversation mode
+        if self.conversation_mode:
+            api_url = self.conversation_api_url
+        else:
+            api_url = "https://reachy.tristy.dev/api/reachy/input"
+        
         response_text = None
+        should_speak = True  # Default to speaking the response
         
         # Try to send to API
         try:
@@ -665,12 +680,24 @@ class SimpleRecorder:
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
-                        response_text = data.get("response", "")
-                        if response_text:
-                            self.log_print(f"[API] Received response: {response_text}")
+                        
+                        # Handle conversation API response format: {"text": "...", "spoken": false}
+                        if self.conversation_mode:
+                            response_text = data.get("text", "")
+                            should_speak = data.get("spoken", True)  # Default to True if not specified
+                            if response_text:
+                                self.log_print(f"[API] Received response: {response_text} (spoken: {should_speak})")
+                            else:
+                                self.log_print("[API] Response missing 'text' key or empty")
+                                response_text = None
                         else:
-                            self.log_print("[API] Response missing 'response' key or empty")
-                            response_text = None
+                            # Handle original API response format: {"response": "..."}
+                            response_text = data.get("response", "")
+                            if response_text:
+                                self.log_print(f"[API] Received response: {response_text}")
+                            else:
+                                self.log_print("[API] Response missing 'response' key or empty")
+                                response_text = None
                     else:
                         self.log_print(f"[API] Error: HTTP {response.status}", "ERROR")
                         response_text = None
@@ -681,9 +708,11 @@ class SimpleRecorder:
             self.log_print(f"[API] Error sending request: {e}", "ERROR")
             response_text = None
         
-        # Speak the response or error message
-        if response_text:
+        # Speak the response if we have one and should_speak is True
+        if response_text and should_speak:
             await self._speak_text(response_text)
+        elif response_text and not should_speak:
+            self.log_print(f"[API] Response received but not speaking (spoken=false): {response_text}")
         else:
             # Speak error message
             error_text = f"Failed to send {text}"
