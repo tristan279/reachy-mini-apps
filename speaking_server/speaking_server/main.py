@@ -11,6 +11,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uvicorn
 
@@ -213,9 +214,34 @@ class SpeakingServer(ReachyMiniApp):
         log_print(f"Starting HTTP server on {server_host}:{server_port}...")
         
         @app.get("/")
-        def root():
-            """Root endpoint with server information."""
-            # Get all registered routes
+        async def root():
+            """Root endpoint - serve the web interface."""
+            static_dir = Path(__file__).parent / "static"
+            index_file = static_dir / "index.html"
+            if index_file.exists():
+                return FileResponse(path=str(index_file), media_type="text/html")
+            else:
+                # Fallback to API info if no static files
+                routes = []
+                for route in app.routes:
+                    if hasattr(route, 'methods') and hasattr(route, 'path'):
+                        routes.append(f"{', '.join(route.methods)} {route.path}")
+                
+                return {
+                    "service": "Speaking Server",
+                    "description": "Text-to-speech server using AWS Polly",
+                    "endpoints": {
+                        "POST /speak": "Convert text to speech",
+                        "GET /health": "Health check",
+                        "GET /speak/{file_path}": "Get audio file",
+                        "POST /api/conversation": "Conversation endpoint"
+                    },
+                    "registered_routes": routes
+                }
+        
+        @app.get("/api")
+        def api_info():
+            """API information endpoint."""
             routes = []
             for route in app.routes:
                 if hasattr(route, 'methods') and hasattr(route, 'path'):
@@ -234,7 +260,7 @@ class SpeakingServer(ReachyMiniApp):
             }
         
         @app.get("/health")
-        def health():
+        async def health():
             """Health check endpoint."""
             return {"status": "healthy"}
         
@@ -402,6 +428,13 @@ class SpeakingServer(ReachyMiniApp):
             
             log_print(f"[CONVERSATION] Mode set to: {conversation_mode_enabled}")
             return {"status": "ok", "conversation_mode": conversation_mode_enabled}
+        
+        # Mount static files AFTER API routes so API routes take precedence
+        # This ensures /health, /api/*, etc. work before static file serving
+        static_dir = Path(__file__).parent / "static"
+        if static_dir.exists():
+            app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+            log_print(f"[STATIC] Mounted static files from: {static_dir}")
         
         # Run uvicorn server in a separate thread
         server_instance = None
