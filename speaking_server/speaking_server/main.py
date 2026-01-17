@@ -206,7 +206,8 @@ class SpeakingServer(ReachyMiniApp):
         app = FastAPI(title="Speaking Server")
         
         # Get port from environment variable or use default
-        server_port = int(os.getenv("SPEAKING_SERVER_PORT", "8000"))
+        # Default to 8001 to match custom_app_url
+        server_port = int(os.getenv("SPEAKING_SERVER_PORT", "8001"))
         server_host = os.getenv("SPEAKING_SERVER_HOST", "0.0.0.0")
         
         log_print(f"Starting HTTP server on {server_host}:{server_port}...")
@@ -438,6 +439,17 @@ class SpeakingServer(ReachyMiniApp):
         import time
         time.sleep(0.5)
         
+        # Log all mounted endpoints after server is ready
+        log_print("=" * 50)
+        log_print("Mounted Endpoints:")
+        endpoint_count = 0
+        for route in app.routes:
+            if hasattr(route, 'methods') and hasattr(route, 'path'):
+                methods = ', '.join(sorted(route.methods))
+                log_print(f"  {methods:20} {route.path}")
+                endpoint_count += 1
+        log_print(f"Total: {endpoint_count} endpoints")
+        log_print("=" * 50)
         log_print("Endpoints mounted successfully")
         log_print(f"API available at: http://{server_host}:{server_port}")
         log_print(f"API documentation: http://{server_host}:{server_port}/docs")
