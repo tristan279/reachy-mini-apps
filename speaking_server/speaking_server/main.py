@@ -214,6 +214,12 @@ class SpeakingServer(ReachyMiniApp):
         @app.get("/")
         def root():
             """Root endpoint with server information."""
+            # Get all registered routes
+            routes = []
+            for route in app.routes:
+                if hasattr(route, 'methods') and hasattr(route, 'path'):
+                    routes.append(f"{', '.join(route.methods)} {route.path}")
+            
             return {
                 "service": "Speaking Server",
                 "description": "Text-to-speech server using AWS Polly",
@@ -222,7 +228,8 @@ class SpeakingServer(ReachyMiniApp):
                     "GET /health": "Health check",
                     "GET /speak/{file_path}": "Get audio file",
                     "POST /api/conversation": "Conversation endpoint"
-                }
+                },
+                "registered_routes": routes
             }
         
         @app.get("/health")
