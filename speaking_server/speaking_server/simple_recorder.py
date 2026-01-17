@@ -155,14 +155,11 @@ class SimpleRecorder:
             full_text = " ".join(self.final_transcripts)
             self.log_print(f"[TRANSCRIPTION] Final transcript: {full_text}")
             
-            # Send to API and speak response
+            # Send to API and speak response (only final transcripts)
             if full_text.strip():
                 asyncio.create_task(self._send_to_api_and_speak(full_text))
-        elif self.partial_transcript:
-            self.log_print(f"[TRANSCRIPTION] Partial transcript: {self.partial_transcript}")
-            # Use partial if no final transcripts
-            if self.partial_transcript.strip():
-                asyncio.create_task(self._send_to_api_and_speak(self.partial_transcript))
+        else:
+            self.log_print("[TRANSCRIPTION] No final transcripts available - skipping API call")
     
     async def _record_loop(self):
         """Record audio frames while recording is active."""
@@ -671,10 +668,12 @@ class SimpleRecorder:
         # Try to send to API
         try:
             self.log_print(f"[API] Sending to {api_url}: {text}")
+            # Use 'message' for conversation endpoint, 'text' for regular endpoint
+            request_body = {"message": text} if self.conversation_mode else {"text": text}
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     api_url,
-                    json={"text": text},
+                    json=request_body,
                     headers={"Content-Type": "application/json"},
                     timeout=aiohttp.ClientTimeout(total=10)
                 ) as response:
