@@ -86,6 +86,7 @@ class SimpleRecorder:
         self.is_recording = True
         self.recorded_audio = []
         self.recording_start_time = time.time()
+        self._stopping_recording = False  # Flag to indicate we're in grace period
         
         # Reset transcription
         self.partial_transcript = ""
@@ -107,13 +108,23 @@ class SimpleRecorder:
             self.log_print("[RECORDER] Not currently recording")
             return
         
+        # Mark as stopping but allow loop to continue briefly to drain buffer
+        self._stopping_recording = True
+        self.log_print("[RECORDER] Stopping recording, draining buffer...")
+        
+        # Give the recording loop a short grace period to capture any buffered audio
+        # This ensures we don't lose audio that's still in the system buffer
+        grace_period = 0.5  # 500ms grace period
+        await asyncio.sleep(grace_period)
+        
+        # Now actually stop recording
         self.is_recording = False
         
         # Stop transcription
         if self.is_transcribing:
             await self._stop_transcription()
         
-        # CRITICAL: Stop the microphone
+        # CRITICAL: Stop the microphone after grace period
         try:
             self._robot.media.stop_recording()
             self.log_print("[RECORDER] Microphone stopped")
@@ -168,11 +179,16 @@ class SimpleRecorder:
         
         self.log_print("[RECORDER] Starting recording loop...")
         
-        while self.is_recording:
+        # Track consecutive None returns during grace period
+        consecutive_nones = 0
+        max_consecutive_nones = 10  # Exit early if we get 10 None returns in a row during grace period
+        
+        while self.is_recording or self._stopping_recording:
             loop_count += 1
             try:
                 audio_frame = self._robot.media.get_audio_sample()
                 if audio_frame is not None:
+                    consecutive_nones = 0  # Reset counter when we get audio
                     # Handle different return formats
                     # After start_recording(), it might return just audio data, not a tuple
                     if isinstance(audio_frame, tuple):
@@ -196,6 +212,13 @@ class SimpleRecorder:
                         await self._send_audio_to_transcribe(sample_rate, audio_data)
                 else:
                     none_count += 1
+                    consecutive_nones += 1
+                    
+                    # During grace period, exit early if buffer is empty
+                    if self._stopping_recording and consecutive_nones >= max_consecutive_nones:
+                        self.log_print(f"[RECORDER] Buffer appears empty ({consecutive_nones} consecutive None returns), exiting early")
+                        break
+                    
                     if none_count == 1:
                         self.log_print("[RECORDER] get_audio_sample() returned None - waiting for audio input...")
                     elif none_count % 100 == 0:  # Log every 100th None to reduce spam
@@ -215,6 +238,8 @@ class SimpleRecorder:
             # Yield to event loop (like console.py does)
             await asyncio.sleep(0)
         
+        # Reset stopping flag
+        self._stopping_recording = False
         self.log_print(f"[RECORDER] Loop ended: {frame_count} frames captured, {none_count} None returns, {loop_count} total loops")
     
     async def replay_recording(self):

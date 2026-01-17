@@ -9,9 +9,10 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+import uvicorn
 
 from reachy_mini import ReachyMini, ReachyMiniApp
 
@@ -197,10 +198,16 @@ class SpeakingServer(ReachyMiniApp):
     def _run_http_server_mode(self, reachy_mini: ReachyMini, stop_event: threading.Event):
         """Run in HTTP server mode (original functionality)."""
         
-        # Mount endpoints to existing settings_app (no new server needed)
-        log_print("Mounting endpoints to existing server...")
+        # Create a new FastAPI app that will bind to 0.0.0.0 for external access
+        app = FastAPI(title="Speaking Server")
         
-        @self.settings_app.get("/")
+        # Get port from environment variable or use default
+        server_port = int(os.getenv("SPEAKING_SERVER_PORT", "8000"))
+        server_host = os.getenv("SPEAKING_SERVER_HOST", "0.0.0.0")
+        
+        log_print(f"Starting HTTP server on {server_host}:{server_port}...")
+        
+        @app.get("/")
         def root():
             """Root endpoint with server information."""
             return {
@@ -209,16 +216,17 @@ class SpeakingServer(ReachyMiniApp):
                 "endpoints": {
                     "POST /speak": "Convert text to speech",
                     "GET /health": "Health check",
-                    "GET /speak/{file_path}": "Get audio file"
+                    "GET /speak/{file_path}": "Get audio file",
+                    "POST /api/conversation": "Conversation endpoint"
                 }
             }
         
-        @self.settings_app.get("/health")
+        @app.get("/health")
         def health():
             """Health check endpoint."""
             return {"status": "healthy"}
         
-        @self.settings_app.post("/speak", response_model=SpeakResponse)
+        @app.post("/speak", response_model=SpeakResponse)
         def speak_text(request: SpeakRequest):
             """Convert text to speech using AWS Polly."""
             try:
@@ -257,7 +265,7 @@ class SpeakingServer(ReachyMiniApp):
                     detail=f"Error generating speech: {str(e)}"
                 )
         
-        @self.settings_app.get("/speak/{file_path:path}")
+        @app.get("/speak/{file_path:path}")
         def get_audio_file(file_path: str):
             """Serve the generated audio file."""
             full_path = Path(file_path)
@@ -292,7 +300,7 @@ class SpeakingServer(ReachyMiniApp):
             
             return simple_recorder
         
-        @self.settings_app.post("/recording/start")
+        @app.post("/recording/start")
         async def start_recording():
             """Start recording audio."""
             try:
@@ -306,7 +314,7 @@ class SpeakingServer(ReachyMiniApp):
                 log_print(traceback.format_exc(), "ERROR")
                 raise HTTPException(status_code=500, detail=str(e))
         
-        @self.settings_app.post("/recording/stop")
+        @app.post("/recording/stop")
         async def stop_recording():
             """Stop recording."""
             try:
@@ -332,7 +340,7 @@ class SpeakingServer(ReachyMiniApp):
                 log_print(traceback.format_exc(), "ERROR")
                 raise HTTPException(status_code=500, detail=str(e))
         
-        @self.settings_app.post("/recording/replay")
+        @app.post("/recording/replay")
         async def replay_recording():
             """Replay the recorded audio."""
             try:
@@ -350,23 +358,68 @@ class SpeakingServer(ReachyMiniApp):
                 log_print(traceback.format_exc(), "ERROR")
                 raise HTTPException(status_code=500, detail=str(e))
         
-        @self.settings_app.get("/recording/status")
+        @app.get("/recording/status")
         def get_recording_status():
             """Get current recording status."""
             if simple_recorder is None:
                 return {"status": "not_initialized"}
             return simple_recorder.get_status()
         
-        @self.settings_app.get("/recording/transcription")
+        @app.get("/recording/transcription")
         def get_transcription():
             """Get current transcription results."""
             if simple_recorder is None:
                 return {"error": "Recording not initialized"}
             return simple_recorder.get_transcription()
         
+        @app.post("/api/conversation")
+        def conversation():
+            """Conversation endpoint that returns text and spoken flag."""
+            return {
+                "text": "I'm an AI server API. Here's how the server is set up:\n\nMake the robot have a conversation by sending text to this endpoint.\n\nI can have conversations, but there are some things I can't do yet:\n- Full voice interaction\n- Complex multi-turn conversations\n- Integration with these APIs\n\nThis endpoint will help guide you through the conversation features.",
+                "spoken": False
+            }
+        
+        # Run uvicorn server in a separate thread
+        server_instance = None
+        
+        def run_server():
+            """Run the uvicorn server in a separate thread."""
+            nonlocal server_instance
+            config = uvicorn.Config(
+                app,
+                host=server_host,
+                port=server_port,
+                log_level="info",
+                access_log=False,  # Reduce noise in logs
+            )
+            server_instance = uvicorn.Server(config)
+            
+            # Create a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                loop.run_until_complete(server_instance.serve())
+            except Exception as e:
+                log_print(f"Server error: {e}", "ERROR")
+                import traceback
+                log_print(traceback.format_exc(), "ERROR")
+            finally:
+                loop.close()
+        
+        # Start server in background thread
+        server_thread = threading.Thread(target=run_server, daemon=True)
+        server_thread.start()
+        
+        # Give server a moment to start
+        import time
+        time.sleep(0.5)
+        
         log_print("Endpoints mounted successfully")
-        log_print(f"API available at: {self.custom_app_url}")
-        log_print(f"API documentation: {self.custom_app_url}/docs")
+        log_print(f"API available at: http://{server_host}:{server_port}")
+        log_print(f"API documentation: http://{server_host}:{server_port}/docs")
+        log_print(f"Access from other devices: http://<robot-ip>:{server_port}")
         log_print("=" * 50)
         
         try:
@@ -376,6 +429,16 @@ class SpeakingServer(ReachyMiniApp):
         except KeyboardInterrupt:
             log_print("Keyboard interruption...")
         finally:
+            # Shutdown server gracefully
+            if server_instance is not None:
+                log_print("Shutting down HTTP server...")
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(server_instance.shutdown())
+                    loop.close()
+                except Exception as e:
+                    log_print(f"Error shutting down server: {e}", "WARNING")
             log_print("Shutdown complete.")
 
 
