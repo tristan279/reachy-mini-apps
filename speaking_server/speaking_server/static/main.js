@@ -38,29 +38,48 @@ function updateUI() {
     }
 }
 
-document.getElementById("antenna-checkbox").addEventListener("change", (e) => {
-    updateAntennasState(e.target.checked);
-});
-
-document.getElementById("conversation-checkbox").addEventListener("change", async (e) => {
-    const enabled = e.target.checked;
-    try {
-        const resp = await fetch("/api/conversation", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ enabled }),
+// Initialize event listeners when DOM is ready
+function initEventListeners() {
+    const antennaCheckbox = document.getElementById("antenna-checkbox");
+    const conversationCheckbox = document.getElementById("conversation-checkbox");
+    const soundBtn = document.getElementById("sound-btn");
+    
+    if (antennaCheckbox) {
+        antennaCheckbox.addEventListener("change", (e) => {
+            updateAntennasState(e.target.checked);
         });
-        const data = await resp.json();
-        console.log("[CONVERSATION] Mode set:", data);
-    } catch (e) {
-        console.error("[CONVERSATION] Error:", e);
-        document.getElementById("status").textContent = "Conversation error: " + e.message;
     }
-});
-
-document.getElementById("sound-btn").addEventListener("click", () => {
-    playSound();
-});
+    
+    if (conversationCheckbox) {
+        conversationCheckbox.addEventListener("change", async (e) => {
+            const enabled = e.target.checked;
+            try {
+                const resp = await fetch("/api/conversation", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ enabled }),
+                });
+                
+                if (!resp.ok) {
+                    const errorText = await resp.text();
+                    throw new Error(`Server error: ${resp.status} - ${errorText}`);
+                }
+                
+                const data = await resp.json();
+                console.log("[CONVERSATION] Mode set:", data);
+            } catch (e) {
+                console.error("[CONVERSATION] Error:", e);
+                document.getElementById("status").textContent = "Conversation error: " + e.message;
+            }
+        });
+    }
+    
+    if (soundBtn) {
+        soundBtn.addEventListener("click", () => {
+            playSound();
+        });
+    }
+}
 
 // Recording functionality
 let isRecording = false;
@@ -286,11 +305,13 @@ function initRecordingButtons() {
 // Initialize when DOM is ready
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
+        initEventListeners();
         initRecordingButtons();
         updateUI();
     });
 } else {
     // DOM is already ready
+    initEventListeners();
     initRecordingButtons();
     updateUI();
 }
